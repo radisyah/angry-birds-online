@@ -11,12 +11,15 @@ const DROP_MS = 45000;           // tanpa statistik selama ini saat bermain = pe
 const MAX_GAME_MS = 30 * 60 * 1000;   // batas keras satu permainan
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const SEATS = ['0', '1', '2', '3'];
+const SIG_TTL = 900;             // detik; pesan sinyal WebRTC (offer/answer) untuk siaran gameplay
+const MAX_SDP = 24000;
 
 const fail = (status, msg) => { const e = new Error(msg); e.status = status; return e; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rid = n => crypto.randomBytes(n).toString('hex');
 const cleanName = s => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 12);
 const roomKey = c => 'room:' + c, presKey = (c, id) => 'pres:' + c + ':' + id, statKey = (c, id) => 'stat:' + c + ':' + id;
+const sigKey = (c, g, id, k) => 'sig:' + c + ':' + g + ':' + id + ':' + k;   // k: 'o' (offer Master) / 'a' (answer pemain)
 const parse = s => { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
 
 /* ---------- logika room ---------- */
@@ -242,12 +245,40 @@ async function actStats(b) {
   const room = parse(await store.cmd(['GET', roomKey(code)]));
   if (!room) throw fail(404, 'Ruangan tidak ditemukan atau sudah kedaluwarsa.');
   const p = playerOf(room, b.token);
+  const out = { status: room.status, gameNo: room.gameNo, v: room.v, serverNow: now };
   if (room.status === 'playing' && !p.done && !p.left) {
     const live = Object.assign(core.cleanLive(b.stats), { t: now, g: room.gameNo });
-    await store.cmd(['SET', statKey(code, p.id), JSON.stringify(live), 'EX', STAT_TTL]);
+    const r = await store.pipeline([
+      ['SET', statKey(code, p.id), JSON.stringify(live), 'EX', STAT_TTL],
+      ['GET', sigKey(code, room.gameNo, p.id, 'o')]
+    ]);
+    const offer = parse(r[1]);   // penawaran siaran dari Room Master (dikirim hanya bila belum dikenal pemain)
+    if (offer && offer.n !== int0(b.sigN)) out.offer = offer;
   }
-  return { status: room.status, gameNo: room.gameNo, v: room.v, serverNow: now };
+  return out;
 }
+/* Sinyal WebRTC untuk siaran gameplay ke Room Master. Master -> pemain: offer; pemain -> Master: answer. Video lewat P2P, bukan server. */
+async function actSignal(b) {
+  const code = normCode(b.code), store = getStore();
+  const room = parse(await store.cmd(['GET', roomKey(code)]));
+  if (!room) throw fail(404, 'Ruangan tidak ditemukan atau sudah kedaluwarsa.');
+  const seat = seatOf(room, b.token);
+  if (room.status !== 'playing') throw fail(409, 'Permainan tidak sedang berjalan.');
+  const sdp = String(b.sdp || ''), n = int0(b.n);
+  if (!sdp || sdp.length > MAX_SDP) throw fail(400, 'SDP tidak valid.');
+  let id, kind;
+  if (b.kind === 'offer') {
+    if (seat !== 'master') throw fail(403, 'Hanya Room Master yang mengirim penawaran.');
+    id = String(b.to); if (!room.players.some(p => p.id === id && !p.done && !p.left)) throw fail(404, 'Pemain tidak ditemukan.');
+    kind = 'o';
+  } else if (b.kind === 'answer') {
+    if (seat === 'master') throw fail(403, 'Room Master tidak menjawab.');
+    id = seat; kind = 'a';
+  } else throw fail(400, 'Jenis sinyal tidak dikenal.');
+  await store.cmd(['SET', sigKey(code, room.gameNo, id, kind), JSON.stringify({ n, sdp }), 'EX', SIG_TTL]);
+  return {};
+}
+const int0 = v => core.int(v, 0, 1e6, 0);
 async function actOver(b) {
   const code = normCode(b.code), now = Date.now();
   return withRoom(code, room => {
@@ -260,11 +291,15 @@ async function actOver(b) {
 /* Polling: satu round-trip (GET room + tanda hadir + statistik), lalu 1 SET tanda hadir. Menulis room hanya bila ada tenggat lewat. */
 async function actState(q) {
   const code = normCode(q.code), token = String(q.token || ''), have = Number(q.v) || 0, now = Date.now(), store = getStore();
-  const first = await store.pipeline([
+  const cmds = [
     ['GET', roomKey(code)],
     ['MGET'].concat(['m'].concat(SEATS).map(i => presKey(code, i))),
     ['MGET'].concat(SEATS.map(i => statKey(code, i)))
-  ]);
+  ];
+  // Room Master yang sedang memantau juga mengambil jawaban siaran (answer) dari pemain; gameNo dari param `g`
+  const gNo = int0(q.g), wantSigs = gNo > 0;
+  if (wantSigs) cmds.push(['MGET'].concat(SEATS.map(i => sigKey(code, gNo, i, 'a'))));
+  const first = await store.pipeline(cmds);
   if (!first[0]) throw fail(404, 'Ruangan tidak ditemukan atau sudah kedaluwarsa.');
   let room = JSON.parse(first[0]);
   const seat = seatOf(room, token);
@@ -277,7 +312,14 @@ async function actState(q) {
     room = JSON.parse(await store.cmd(['GET', roomKey(code)]));
   }
   if (room.v === have && !(seat === 'master' && room.status === 'playing')) return { unchanged: true, v: room.v, serverNow: now, online: pres };
-  return { view: viewFor(room, seat, now, pres, stats) };
+  const view = viewFor(room, seat, now, pres, stats);
+  if (seat === 'master' && room.status === 'playing' && wantSigs && room.gameNo === gNo) {
+    // `an` = "id:n,id:n" jawaban yang sudah diproses Master (tidak dikirim ulang)
+    const known = {}; String(q.an || '').split(',').forEach(x => { const [i, n] = x.split(':'); if (i) known[i] = Number(n); });
+    const sigs = {}; SEATS.forEach((id, i) => { const a = parse(first[3][i]); if (a && known[id] !== a.n) sigs[id] = a; });
+    if (Object.keys(sigs).length) view.sigs = sigs;
+  }
+  return { view };
 }
 
 /* ---------- handler HTTP (Vercel) ---------- */
@@ -293,7 +335,7 @@ module.exports = async function handler(req, res) {
     if (req.method === 'GET') out = await actState(req.query || {});
     else if (req.method === 'POST') {
       const b = readBody(req);
-      const acts = { create: actCreate, join: actJoin, ready: actReady, start: actStart, stop: actStop, again: actAgain, leave: actLeave, stats: actStats, over: actOver };
+      const acts = { create: actCreate, join: actJoin, ready: actReady, start: actStart, stop: actStop, again: actAgain, leave: actLeave, stats: actStats, over: actOver, signal: actSignal };
       if (!acts[b.action]) throw fail(400, 'Aksi tidak dikenal.');
       out = await acts[b.action](b);
     } else throw fail(405, 'Metode tidak didukung.');

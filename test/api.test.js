@@ -140,6 +140,28 @@ const fin = (score, extra) => Object.assign({ score, win: true, ok: 15, wrong: 1
     assert.strictEqual(new Set(ok.map(r => r.view.myId)).size, 3);
     const v = (await state(h.code, h.token)).view; assert.strictEqual(new Set(v.players.map(p => p.id)).size, 4);
   });
+  await T('siaran gameplay: sinyal offer (Master) -> pemain -> answer -> Master; validasi akses', async () => {
+    const m = await post('create', { name: 'Guru', role: 'master' }), a = await post('join', { code: m.code, name: 'Ayu' }), b = await post('join', { code: m.code, name: 'Budi' });
+    await post('ready', { code: m.code, token: a.token, ready: true }); await post('ready', { code: m.code, token: b.token, ready: true });
+    assert.strictEqual((await post('signal', { code: m.code, token: m.token, kind: 'offer', to: '0', n: 1, sdp: 'x' })).http, 409);   // belum bermain
+    const st = await post('start', { code: m.code, token: m.token }); assert(st.ok);
+    const g = st.view.gameNo;
+    assert.strictEqual((await post('signal', { code: m.code, token: a.token, kind: 'offer', to: '1', n: 1, sdp: 'x' })).http, 403);   // pemain tidak boleh kirim offer
+    assert.strictEqual((await post('signal', { code: m.code, token: m.token, kind: 'answer', n: 1, sdp: 'x' })).http, 403);
+    assert.strictEqual((await post('signal', { code: m.code, token: m.token, kind: 'offer', to: '7', n: 1, sdp: 'x' })).http, 404);
+    assert.strictEqual((await post('signal', { code: m.code, token: m.token, kind: 'offer', to: '0', n: 1, sdp: 'x'.repeat(30000) })).http, 400);
+    assert((await post('signal', { code: m.code, token: m.token, kind: 'offer', to: '0', n: 1, sdp: 'OFFER-A' })).ok);
+    let s0 = await post('stats', { code: m.code, token: a.token, stats: { score: 5 }, sigN: 0 });
+    assert(s0.offer && s0.offer.n === 1 && s0.offer.sdp === 'OFFER-A');
+    s0 = await post('stats', { code: m.code, token: a.token, stats: { score: 5 }, sigN: 1 }); assert(!s0.offer);     // sudah dikenal: tidak dikirim ulang
+    const s1 = await post('stats', { code: m.code, token: b.token, stats: { score: 5 }, sigN: 0 }); assert(!s1.offer);  // offer milik pemain lain tidak bocor
+    assert((await post('signal', { code: m.code, token: a.token, kind: 'answer', n: 1, sdp: 'ANSWER-A' })).ok);
+    let ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '' });
+    assert.deepStrictEqual(ms.view.sigs, { '0': { n: 1, sdp: 'ANSWER-A' } });
+    ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '0:1' }); assert(!ms.view.sigs);             // sudah diproses: tidak dikirim ulang
+    const pv = await state(m.code, a.token); assert(!JSON.stringify(pv.view).includes('ANSWER-A'));                       // pemain tidak menerima jawaban
+    const old = await api('GET', null, { code: m.code, token: m.token, v: 0, g: g + 5 }); assert(!old.view.sigs);          // gameNo lain: kosong
+  });
   await T('polling tanpa perubahan membalas kecil (unchanged)', async () => {
     const h = await post('create', { name: 'Q' }); const v = await state(h.code, h.token, 0);
     const u = await state(h.code, h.token, v.view.v); assert(u.unchanged && u.v === v.view.v && u.online);

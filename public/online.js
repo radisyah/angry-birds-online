@@ -38,13 +38,18 @@ style.textContent = `
 #mv{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 #mb{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:8px 14px;background:#0006;font-size:14px;flex-wrap:wrap}
 #mg{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:10px;padding:10px;overflow:auto}
-.tl{min-height:0;min-width:0;display:flex;flex-direction:column;gap:8px;background:#0009;border-radius:12px;padding:12px 14px;border:2px solid #ffffff30;justify-content:center}
-.tl.fin{border-color:#ffd54f}.tl.dead{border-color:#ff5252}.tl.off{opacity:.55}
-.tl .th{display:flex;justify-content:space-between;gap:8px;font-weight:800;font-size:18px}
-.tl .big{font-size:34px;font-weight:900;color:#ffd54f;line-height:1}
-.tl .pb{height:10px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
+.tl{min-height:0;min-width:0;display:flex;flex-direction:column;gap:6px;background:#0009;border-radius:12px;padding:8px 10px;border:2px solid #ffffff30;position:relative}
+.tl.fin{border-color:#ffd54f}.tl.off{border-color:#888}
+.tl .th{display:flex;justify-content:space-between;gap:8px;font-weight:800;font-size:16px}
+.tl .vw{position:relative;flex:1;min-height:0;background:#000;border-radius:8px;overflow:hidden;cursor:zoom-in;display:flex;align-items:center;justify-content:center}
+.tl .vw video{width:100%;height:100%;object-fit:contain;background:#000}
+.tl .vs{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;font-size:14px;color:#cfd8ff;background:#000a;pointer-events:none}
+.tl .vs.ok{display:none}
+.tl .sc{position:absolute;left:8px;top:6px;background:#000a;border-radius:8px;padding:2px 10px;font-size:22px;font-weight:900;color:#ffd54f;pointer-events:none}
+.tl .pb{height:6px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
 .tl .tb{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:#cfe;flex-wrap:wrap}
 .tl .bd{color:#ffd54f;font-weight:800}
+#mg.focus{grid-template-columns:1fr}#mg.focus .tl{display:none}#mg.focus .tl.zm{display:flex}#mg.focus .vw{cursor:zoom-out}
 #rk .card{width:min(96vw,720px)}
 table.rt{width:100%;border-collapse:collapse;font-size:14px}
 .rt th,.rt td{padding:7px 5px;border-bottom:1px solid #ffffff30;text-align:center;white-space:nowrap}
@@ -115,7 +120,9 @@ function startPolling() {
 async function pollOnce() {
   if (!ON) return;
   try {
-    const r = await fetch(API + '?' + new URLSearchParams({ code: ON.code, token: ON.token, v: V ? V.v : 0 }), { cache: 'no-store' });
+    const qs = { code: ON.code, token: ON.token, v: V ? V.v : 0 };
+    if (V && V.side === 'master' && V.status === 'playing') { qs.g = V.gameNo; qs.an = Object.keys(links).map(id => id + ':' + links[id].an).join(','); }
+    const r = await fetch(API + '?' + new URLSearchParams(qs), { cache: 'no-store' });
     const j = await r.json();
     if (!j.ok) { if (r.status === 404 || r.status === 401) return sessionLost(j.error); throw new Error(j.error); }
     failCount = 0;
@@ -133,7 +140,8 @@ function applyView(v) {
   // kembali ke lobi (Main Lagi) setelah bermain: muat ulang agar game bersih
   if (playing && v.status === 'lobby') { location.reload(); return; }
   if (v.side === 'player' && v.status === 'playing' && !playing && v.seed != null) startPlayer(v.seed);
-  if (v.status === 'finished') { stopStats(); if (playing) freezeGame(); }
+  if (v.status === 'finished') { stopStats(); stopBroadcast(); if (playing) freezeGame(); closeAllLinks(); }
+  if (v.side === 'master' && v.status === 'playing' && v.sigs) Object.keys(v.sigs).forEach(id => gotAnswer(id, v.sigs[id]));
   render();
 }
 
@@ -220,26 +228,88 @@ function showWaiting() {
   $$('lv').onclick = leave;
 }
 
-/* ---------- Room Master: pantauan langsung ---------- */
+/* ---------- Room Master: siaran gameplay langsung (WebRTC, video P2P dari canvas tiap pemain) ---------- */
+const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+const LINK_RETRY_MS = 14000;
+let links = {};          // id -> { pc, n, an (jawaban terakhir yang diproses), t (mulai), ok, stream }
+function waitIce(pc, ms) {
+  return new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const done = () => { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', ch); res(); };
+    const ch = () => { if (pc.iceGatheringState === 'complete') done(); };
+    const t = setTimeout(done, ms); pc.addEventListener('icegatheringstatechange', ch);
+  });
+}
+function closeLink(id) { const l = links[id]; if (!l) return; try { l.pc.close(); } catch (e) { } delete links[id]; }
+function closeAllLinks() { Object.keys(links).forEach(closeLink); }
+async function openLink(id) {
+  if (typeof RTCPeerConnection === 'undefined') return;
+  const prev = links[id], n = prev ? prev.n + 1 : 1, gNo = V.gameNo;
+  if (prev) { try { prev.pc.close(); } catch (e) { } }
+  const pc = new RTCPeerConnection(ICE), l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true };
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.ontrack = ev => { const vid = document.querySelector('#vd' + id); if (vid) { vid.srcObject = ev.streams[0] || new MediaStream([ev.track]); vid.play().catch(() => { }); } };
+  pc.onconnectionstatechange = () => { l.ok = pc.connectionState === 'connected'; updateLinkUI(id); };
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc, 3500);
+    if (links[id] !== l || !V || V.gameNo !== gNo) return;
+    await call('signal', { kind: 'offer', to: id, n, sdp: pc.localDescription.sdp });
+  } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
+  l.busy = false;
+}
+async function gotAnswer(id, a) {
+  const l = links[id]; if (!l || !a || a.n !== l.n || l.an === a.n) return;
+  l.an = a.n;
+  try { await l.pc.setRemoteDescription({ type: 'answer', sdp: a.sdp }); } catch (e) { l.an = 0; }
+}
+function updateLinkUI(id) {
+  const vs = document.querySelector('#vs' + id), l = links[id]; if (!vs) return;
+  const vid = document.querySelector('#vd' + id), ok = (l && l.ok) || (!l && vid && vid.srcObject);   // tanpa tautan tapi ada gambar terakhir: tetap tampil
+  vs.className = 'vs' + (ok ? ' ok' : '');
+  if (!ok) vs.textContent = !l ? 'Video tidak tersedia' : (l.n > 2 ? '📡 Video tidak bisa tersambung (jaringan pemain memblokir). Skor tetap tampil.' : '📡 Menyambungkan video…');
+}
+function maintainLinks(v) {
+  v.players.forEach(p => {
+    const active = !p.done && !p.left && p.online;
+    const l = links[p.id];
+    if (!active) { if (l && (p.done || p.left)) { closeLink(p.id); updateLinkUI(p.id); } return; }
+    if (!l) { openLink(p.id); return; }
+    const bad = ['failed', 'disconnected', 'closed'].includes(l.pc.connectionState);
+    if (!l.ok && !l.busy && (bad || Date.now() - l.t > LINK_RETRY_MS) && l.n < 6) { openLink(p.id); }
+    else if (l.ok && bad) { l.ok = false; openLink(p.id); }
+  });
+}
+
 function showMasterGrid() {
   const v = V;
   if (shownKey !== 'grid' + v.gameNo || !$$('mg')) {
+    closeAllLinks();
     ol.className = 'full'; shownKey = 'grid' + v.gameNo;
-    ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg"></div></div>`;
+    ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
+      <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><video id="vd${p.id}" autoplay muted playsinline></video><div class="vs" id="vs${p.id}">📡 Menyambungkan video…</div><div class="sc" id="sc${p.id}">⭐ 0</div></div>
+      <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
+      <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };
+    v.players.forEach(p => { $$('vw' + p.id).onclick = () => { const mg = $$('mg'), t = $$('tl' + p.id), on = !t.classList.contains('zm'); mg.querySelectorAll('.tl').forEach(x => x.classList.remove('zm')); mg.classList.toggle('focus', on); if (on) t.classList.add('zm'); }; });
   }
   const done = v.players.filter(p => p.done).length;
   $$('ms').textContent = done + '/' + v.players.length + ' pemain selesai';
-  $$('mg').innerHTML = v.players.map((p, i) => {
+  v.players.forEach((p, i) => {
     const s = p.stats || {}, q = Math.min(TOTAL_Q, s.q || 0);
     let badge = '';
-    if (p.left) badge = '🚪 Keluar'; else if (p.done) badge = s.win === false && !p.stats ? '✅ Selesai' : '✅ Selesai'; else if (!p.online) badge = '🔌 Terputus';
-    return `<div class="tl${p.done ? ' fin' : ''}${!p.online && !p.done ? ' off' : ''}">
-      <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span>${'❤️'.repeat(Math.max(0, s.hearts == null ? 3 : s.hearts))}</span></div>
-      <div class="big">⭐ ${s.score || 0}</div>
-      <div class="pb"><div style="width:${Math.round(q / TOTAL_Q * 100)}%"></div></div>
-      <div class="tb"><span>Soal ${Math.min(TOTAL_Q, q + (p.done ? 0 : 1))}/${TOTAL_Q} · 🔥${s.streak || 0} · ✅${s.ok || 0}</span><span class="bd">${badge}</span></div></div>`;
-  }).join('');
+    if (p.left) badge = '🚪 Keluar'; else if (p.done) badge = '✅ Selesai'; else if (!p.online) badge = '🔌 Terputus';
+    const t = $$('tl' + p.id); if (!t) return;
+    t.className = t.className.replace(/ ?(fin|off)\b/g, '') + (p.done ? ' fin' : '') + (!p.online && !p.done ? ' off' : '');
+    $$('hr' + p.id).textContent = '❤️'.repeat(Math.max(0, s.hearts == null ? 3 : s.hearts));
+    $$('sc' + p.id).textContent = '⭐ ' + (s.score || 0);
+    $$('pg' + p.id).style.width = Math.round(q / TOTAL_Q * 100) + '%';
+    $$('tx' + p.id).textContent = 'Soal ' + Math.min(TOTAL_Q, q + (p.done ? 0 : 1)) + '/' + TOTAL_Q + ' · 🔥' + (s.streak || 0) + ' · ✅' + (s.ok || 0);
+    $$('bd' + p.id).textContent = badge;
+    updateLinkUI(p.id);
+  });
+  maintainLinks(v);
 }
 
 /* ---------- papan skor akhir ---------- */
@@ -294,8 +364,9 @@ const liveStats = () => {
 async function sendStats() {
   if (!ON || overSent || !playing) return;
   try {
-    const j = await call('stats', { stats: liveStats() });
+    const j = await call('stats', { stats: liveStats(), sigN: sendN });
     failCount = 0;
+    if (j.offer && j.offer.n !== sendN) answerOffer(j.offer);
     if (V && (j.status !== 'playing' || j.gameNo !== V.gameNo)) pollOnce();
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
 }
@@ -303,9 +374,9 @@ async function sendOver() {
   if (overBusy || overSent || !results[0]) return;
   overBusy = true;
   for (let i = 0; i < 20 && !overSent; i++) {
-    try { const j = await call('over', { result: results[0] }); overSent = true; stopStats(); applyView(j.view); }
+    try { const j = await call('over', { result: results[0] }); overSent = true; stopStats(); stopBroadcast(); applyView(j.view); }
     catch (e) {
-      if (e.status === 409) { overSent = true; stopStats(); pollOnce(); break; }   // permainan sudah dihentikan / selesai
+      if (e.status === 409) { overSent = true; stopStats(); stopBroadcast(); pollOnce(); break; }   // permainan sudah dihentikan / selesai
       if (e.status === 401 || e.status === 404) { handleErr(e); break; }
       await new Promise(r => setTimeout(r, 1500));
     }
@@ -313,6 +384,27 @@ async function sendOver() {
   overBusy = false;
 }
 function stopStats() { clearInterval(statT); statT = 0; }
+
+/* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC) ---------- */
+let sendPC = null, sendN = 0, sendBusy = false;
+function stopBroadcast() { if (sendPC) { try { sendPC.close(); } catch (e) { } } sendPC = null; }
+async function answerOffer(offer) {
+  if (sendBusy || typeof RTCPeerConnection === 'undefined') return;
+  sendBusy = true; stopBroadcast();
+  try {
+    const stream = document.getElementById('c').captureStream(20);
+    const pc = sendPC = new RTCPeerConnection(ICE);
+    stream.getTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (e) { } pc.addTrack(t, stream); });
+    await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+    pc.getSenders().forEach(sn => { try { const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}]; pr.encodings[0].maxBitrate = 800000; pr.encodings[0].scaleResolutionDownBy = 1.5; sn.setParameters(pr).catch(() => { }); } catch (e) { } });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitIce(pc, 3500);
+    if (sendPC !== pc) return;
+    await call('signal', { kind: 'answer', n: offer.n, sdp: pc.localDescription.sdp });
+    sendN = offer.n;
+  } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
+  sendBusy = false;
+}
 
 /* ---------- awal ---------- */
 document.addEventListener('visibilitychange', () => { if (!document.hidden && ON) pollOnce(); });

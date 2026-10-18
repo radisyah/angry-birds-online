@@ -7,7 +7,7 @@ Semua pemain mengerjakan **soal, susunan blok, dan urutan burung yang sama** (se
 masing-masing; skor tertinggi menang (seri dipecah dengan jumlah tembakan paling sedikit).
 
 ```
-Browser P1..P4 ─┐                         ┌─ Upstash Redis (room, tanda hadir, statistik langsung, kunci)
+Browser P1..P4 ─┐                         ┌─ Upstash Redis (room, tanda hadir, statistik langsung, kunci, sinyal WebRTC)
 Room Master ────┼─ polling ─ /api/room ───┤
                 └                         └─ public/game-core.js (penyaringan skor & papan peringkat, dipakai server & klien)
 ```
@@ -15,8 +15,12 @@ Room Master ────┼─ polling ─ /api/room ───┤
 ## Alur
 - **Buat Ruangan** (pembuat = Pemain 1 & pemilik) atau **Jadi Room Master** (hanya memantau, tidak bermain). Teman bergabung dengan kode / tombol *Salin Tautan* (`?room=KODE`).
 - 2–4 pemain. Pemain menekan *Saya siap*; pemilik (Room Master bila ada, kalau tidak Pemain 1) menekan *Mulai*.
-- Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat kartu skor langsung**
-  semua pemain (pengganti stream layar versi LAN, yang tidak bisa jalan di Vercel) dan bisa *Hentikan permainan*.
+- Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**
+  (video canvas game, lengkap dengan soal & HUD, 640×360 ±20 fps) plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain.
+  Master juga bisa *Hentikan permainan*.
+- **Cara siaran video:** WebRTC peer-to-peer. Server (Vercel) hanya menukar pesan sinyal (offer/answer, ±2 perintah Redis per pemain), video **tidak**
+  lewat server sehingga tidak menambah biaya. Memakai STUN Google; bila jaringan pemain/master memblokir P2P (NAT ketat, wifi sekolah/kantor),
+  kartu itu menampilkan "Video tidak bisa tersambung" dan skor tetap tampil. Untuk jaringan seperti itu tambahkan server TURN di `ICE` (`public/online.js`).
 - Setelah semua pemain selesai → papan skor akhir. Pemilik bisa *Main lagi* (kembali ke lobi, seed baru).
 - Pemain keluar / terputus > 45 dtk tanpa statistik / dihentikan Master → dihitung gugur dengan skor terakhir. Batas keras satu permainan 30 menit.
 - Muat ulang halaman di tengah bermain = dianggap keluar dari ronde itu (skor lokal hilang). Di lobi & papan skor, sesi otomatis tersambung kembali.
@@ -33,13 +37,13 @@ Bila Redis belum terhubung, API membalas: *"Database belum dikonfigurasi…"*.
 ## Lokal
 ```bash
 node dev-server.js        # http://localhost:3000 (penyimpanan memori, hanya untuk pengembangan)
-npm test                  # 17 tes API: lewat memori DAN lewat jalur Redis REST (server tiruan format Upstash)
+npm test                  # 18 tes API: lewat memori DAN lewat jalur Redis REST (server tiruan format Upstash)
 python3 test/e2e.py       # 3 browser Chromium: Room Master + 2 pemain (pip install playwright && playwright install chromium)
 ```
 Game memuat `matter-js` dari cdnjs (seperti file aslinya). `test/e2e.py` memakai pengganti tanpa fisika (`test/matter-stub.js`) bila matter-js tidak tersedia.
 
 ## Catatan biaya & batasan
-- Redis: tiap pemain yang bermain ±1 GET + 1 SET per 2 dtk; Room Master ±4 perintah per polling (1,5 dtk). Satu ronde 4 pemain ±10 menit ≈ 6.000–8.000 perintah.
+- Redis: tiap pemain yang bermain ±1 GET + 1 SET per 2 dtk; Room Master ±5 perintah per polling (1,5 dtk); +1 GET per kiriman statistik untuk membaca sinyal. Satu ronde 4 pemain ±10 menit ≈ 6.000–8.000 perintah.
 - **Skor dihitung di perangkat pemain** (fisika tidak bisa dijalankan server), jadi tidak kebal dari kecurangan lewat konsol browser. Server hanya
   membatasi nilai ke rentang wajar (maks. 15 soal, skor ≤ 200.000, dst.). Cocok untuk kelas/teman, bukan turnamen berhadiah.
 - Tab yang disembunyikan menghentikan game (browser menghentikan animasi) sehingga statistik berhenti → setelah 45 dtk pemain dianggap gugur.
