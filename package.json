@@ -1,0 +1,12 @@
+{
+  "name": "angry-birds-math-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Angry Birds Math Edition. Kompetisi 2–4 pemain online untuk Vercel (Upstash Redis).",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "test": "node test/api.test.js && node test/redis-rest.test.js",
+    "test:e2e": "python3 test/e2e.py"
+  },
+  "engines": { "node": ">=20" }
+}

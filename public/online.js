@@ -1,0 +1,343 @@
+/* Klien online Angry Birds Math — dimuat setelah game utama di index.html.
+   Pola sama dengan war-of-kingdom: kode ruangan 5 karakter, token sesi di localStorage, polling /api/room (Vercel + Upstash Redis).
+   Fisika berjalan lokal di tiap perangkat; soal, susunan blok & urutan burung sama untuk semua pemain (seed dari server). */
+(() => {
+'use strict';
+const API = '/api/room', SESSION_KEY = 'abm_online_session', NAME_KEY = 'abm_online_name';
+const $$ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const TOTAL_Q = 15;
+
+const style = document.createElement('style');
+style.textContent = `
+#ol{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#0b1433,#2b3c78 60%,#5b3a1c);color:#fff;font:16px system-ui,sans-serif;overflow:auto;-webkit-user-select:none;user-select:none}
+#ol.full{align-items:stretch;justify-content:stretch;overflow:hidden}
+#ol.hide{display:none}
+#ol .card{width:min(92vw,540px);margin:auto;background:#ffffff1a;border:2px solid #ffffff33;border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:14px;text-align:center}
+#ol .lg{font-size:30px;font-weight:900;line-height:1.1}
+#ol .lg small{display:block;font-size:12px;letter-spacing:.25em;color:#ffd54f;margin-top:6px;text-transform:uppercase}
+#ol input{font:inherit;padding:12px 14px;border-radius:12px;border:0;background:#fff;color:#2a2118;text-align:center;-webkit-user-select:text;user-select:text;width:100%;box-sizing:border-box}
+#ol input.code{text-transform:uppercase;letter-spacing:.3em;font-weight:800}
+#ol .b{font:inherit;font-weight:800;border:0;border-radius:12px;padding:12px 18px;color:#fff;background:#d62828;cursor:pointer}
+#ol .b:active{filter:brightness(.9)}
+#ol .b.gold{background:#c98b1e}#ol .b.gr{background:#2e9e4f}#ol .b.gy{background:#ffffff30}
+#ol .b:disabled{opacity:.4;cursor:not-allowed}
+#ol .rw{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+#ol .rw>*{flex:1 1 auto}
+#ol .er{color:#ff9aa5;min-height:1.2em;font-size:14px}
+#ol .sm{font-size:13px;opacity:.8;margin:0;line-height:1.5}
+#ol .hr{border:0;border-top:1px solid #ffffff30;margin:2px 0;width:100%}
+#ol .codebox{font-size:38px;font-weight:900;letter-spacing:.3em;background:#00000040;border-radius:14px;padding:8px 0 8px .3em;color:#ffd54f;-webkit-user-select:text;user-select:text}
+#ol .sl{display:flex;align-items:center;gap:10px;background:#ffffff1c;border-radius:12px;padding:10px 14px;text-align:left}
+#ol .sl i{font-style:normal;background:#d62828;border-radius:50%;min-width:30px;height:30px;display:grid;place-items:center;font-weight:800;font-size:13px}
+#ol .sl b{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ol .sl.me{outline:2px solid #ffd54f}
+#ol .sl .rs{font-size:13px;opacity:.9}
+#ol .dot{display:inline-block;width:.6em;height:.6em;border-radius:50%;background:#2e9e4f;margin-right:.4em}
+#ol .dot.off{background:#888}
+#mv{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+#mb{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:8px 14px;background:#0006;font-size:14px;flex-wrap:wrap}
+#mg{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:10px;padding:10px;overflow:auto}
+.tl{min-height:0;min-width:0;display:flex;flex-direction:column;gap:8px;background:#0009;border-radius:12px;padding:12px 14px;border:2px solid #ffffff30;justify-content:center}
+.tl.fin{border-color:#ffd54f}.tl.dead{border-color:#ff5252}.tl.off{opacity:.55}
+.tl .th{display:flex;justify-content:space-between;gap:8px;font-weight:800;font-size:18px}
+.tl .big{font-size:34px;font-weight:900;color:#ffd54f;line-height:1}
+.tl .pb{height:10px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
+.tl .tb{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:#cfe;flex-wrap:wrap}
+.tl .bd{color:#ffd54f;font-weight:800}
+#rk .card{width:min(96vw,720px)}
+table.rt{width:100%;border-collapse:collapse;font-size:14px}
+.rt th,.rt td{padding:7px 5px;border-bottom:1px solid #ffffff30;text-align:center;white-space:nowrap}
+.rt th{color:#7ee8fa;font-size:12px}.rt td.n{text-align:left;font-weight:700}.rt td.s{color:#ffd54f;font-weight:800}
+.rt tr.w td{background:#ffd54f22}.rt tr.me td.n{text-decoration:underline}
+.tw{overflow:auto}
+#olt{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:10000;background:#000d;color:#fff;border-radius:99px;padding:8px 16px;font:14px system-ui,sans-serif;max-width:90vw;display:none}
+body.online #pz,body.online #rs,body.online #mn,body.online #om{display:none!important}
+@media (max-width:640px){#mg{grid-template-columns:1fr}}
+`;
+document.head.appendChild(style);
+
+const ol = document.createElement('div'); ol.id = 'ol'; document.body.appendChild(ol);
+const tbar = document.createElement('div'); tbar.id = 'olt'; document.body.appendChild(tbar);
+
+/* ---------- state ---------- */
+let ON = null;            // { code, token, side }
+let V = null;             // tampilan terakhir dari server
+let pollTimer = null, statT = 0, failCount = 0, toastTimer = 0, clockOffset = 0;
+let playing = false, overSent = false, overBusy = false, shownKey = '', menuForm = { name: '', code: '' }, menuErr = '';
+
+function toast(msg) { tbar.textContent = msg; tbar.style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(() => { tbar.style.display = 'none'; }, 4200); }
+const getName = () => { try { return localStorage.getItem(NAME_KEY) || ''; } catch (e) { return ''; } };
+const saveName = n => { try { localStorage.setItem(NAME_KEY, n); } catch (e) { } };
+const saveSession = () => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(ON)); } catch (e) { } };
+const loadSession = () => { try { const o = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); return o && o.code && o.token ? o : null; } catch (e) { return null; } };
+const clearSession = () => { try { localStorage.removeItem(SESSION_KEY); } catch (e) { } };
+const sfx = () => { try { if (typeof A !== 'undefined' && A.init) A.init(); } catch (e) { } };
+
+async function call(action, extra) {
+  const body = Object.assign({ action }, ON ? { code: ON.code, token: ON.token } : {}, extra || {});
+  let r, j;
+  try {
+    r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    j = await r.json();
+  } catch (e) { throw Object.assign(new Error('Tidak bisa terhubung ke server. Periksa koneksi internetmu.'), { status: 0 }); }
+  if (!j.ok) throw Object.assign(new Error(j.error || 'Terjadi kesalahan.'), { status: r.status });
+  return j;
+}
+function handleErr(e) {
+  if (e.status === 401 || e.status === 404) return sessionLost(e.message);
+  toast(e.message || 'Terjadi kesalahan.');
+}
+function sessionLost(msg) {
+  stopPolling(); stopStats(); clearSession(); ON = null; V = null;
+  if (playing) { location.reload(); return; }
+  menuErr = msg || ''; render();
+}
+
+/* ---------- polling ---------- */
+function stopPolling() { if (pollTimer) clearTimeout(pollTimer); pollTimer = null; }
+function pollDelay() {
+  if (document.hidden) return 4000;
+  if (!V) return 1000;
+  if (V.status === 'playing') return V.side === 'master' ? 1500 : 2000;
+  return 1000;
+}
+function startPolling() {
+  stopPolling();
+  const loop = async () => {
+    if (!ON) return;
+    // pemain yang sedang bermain tidak perlu polling: balasan pengiriman statistik memberi tahu bila status berubah
+    if (!(playing && V && V.side === 'player' && V.status === 'playing' && !overSent)) await pollOnce();
+    if (ON) pollTimer = setTimeout(loop, pollDelay());
+  };
+  pollTimer = setTimeout(loop, 600);
+}
+async function pollOnce() {
+  if (!ON) return;
+  try {
+    const r = await fetch(API + '?' + new URLSearchParams({ code: ON.code, token: ON.token, v: V ? V.v : 0 }), { cache: 'no-store' });
+    const j = await r.json();
+    if (!j.ok) { if (r.status === 404 || r.status === 401) return sessionLost(j.error); throw new Error(j.error); }
+    failCount = 0;
+    if (j.unchanged) {
+      clockOffset = j.serverNow - Date.now();
+      if (V && j.online && JSON.stringify(V.__on) !== JSON.stringify(j.online)) { V.__on = j.online; V.players.forEach(p => { p.online = !!j.online[p.id]; }); V.masterOnline = !!j.online.m; render(); }
+      return;
+    }
+    applyView(j.view);
+  } catch (e) { if (++failCount === 3) toast('Koneksi tidak stabil… mencoba menyambung kembali'); }
+}
+function applyView(v) {
+  const prev = V; V = v; clockOffset = v.serverNow - Date.now();
+  if (v.status === 'abandoned') { const m = v.leftBy === 'master' ? 'Room Master menutup ruangan.' : 'Ruangan ditutup.'; if (!(playing && prev && prev.status === 'finished')) { sessionLost(m); return; } }
+  // kembali ke lobi (Main Lagi) setelah bermain: muat ulang agar game bersih
+  if (playing && v.status === 'lobby') { location.reload(); return; }
+  if (v.side === 'player' && v.status === 'playing' && !playing && v.seed != null) startPlayer(v.seed);
+  if (v.status === 'finished') { stopStats(); if (playing) freezeGame(); }
+  render();
+}
+
+/* ---------- layar ---------- */
+function render() {
+  const key = V ? [V.status, V.side, V.gameNo].join('|') : 'menu';
+  if (!V) return showMenu();
+  if (V.status === 'lobby') return showLobby();
+  if (V.status === 'playing') {
+    if (V.side === 'master') return showMasterGrid();
+    if (!playing) return showWaiting();   // halaman dimuat ulang setelah selesai: tunggu pemain lain
+    ol.classList.add('hide');             // layar game tampil
+    return;
+  }
+  if (V.status === 'finished') return showRank();
+}
+
+function showMenu() {
+  ol.className = ''; shownKey = 'menu';
+  if (!menuForm.name) menuForm.name = getName();
+  ol.innerHTML = `<div class="card"><div class="lg">🐦 Angry Birds<small>Math Edition · Online</small></div>
+  <input id="nm" maxlength="12" placeholder="Nama kamu" value="${esc(menuForm.name)}">
+  <div class="rw"><button class="b" id="cp">🎮 Buat Ruangan</button><button class="b gold" id="cm">👑 Jadi Room Master</button></div>
+  <hr class="hr">
+  <input id="cd" class="code" maxlength="5" placeholder="KODE" value="${esc(menuForm.code)}">
+  <button class="b gr" id="jn">Gabung Ruangan</button>
+  <div class="er" id="er">${esc(menuErr)}</div>
+  <p class="sm">2–4 pemain di perangkat masing-masing mengerjakan <b>soal & susunan blok yang sama</b>. Skor tertinggi menang. Room Master (opsional) memantau skor langsung tanpa ikut bermain.</p></div>`;
+  menuErr = '';
+  const keep = () => { menuForm.name = $$('nm').value; menuForm.code = $$('cd').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); };
+  const nameOk = () => { keep(); if (!menuForm.name.trim()) { $$('er').textContent = 'Isi nama dulu.'; return false; } saveName(menuForm.name.trim()); return true; };
+  $$('nm').oninput = $$('cd').oninput = () => { keep(); $$('cd').value = menuForm.code; };
+  const create = async role => { if (!nameOk()) return; sfx(); try { const j = await call('create', { name: menuForm.name.trim(), role }); enter(j); } catch (e) { $$('er').textContent = e.message; } };
+  $$('cp').onclick = () => create('player');
+  $$('cm').onclick = () => create('master');
+  $$('jn').onclick = async () => {
+    if (!nameOk()) return; if (menuForm.code.length !== 5) { $$('er').textContent = 'Kode ruangan harus 5 karakter.'; return; }
+    sfx(); try { const j = await call('join', { code: menuForm.code, name: menuForm.name.trim() }); enter(j); } catch (e) { $$('er').textContent = e.message; }
+  };
+}
+function enter(j) {
+  ON = { code: j.code, token: j.token, side: j.side }; saveSession(); V = null; applyView(j.view); startPolling();
+  try { history.replaceState(null, '', location.pathname); } catch (e) { }
+}
+
+const slotRow = (i, p, me) => p
+  ? `<div class="sl${me ? ' me' : ''}"><i>P${i + 1}</i><b>${esc(p.name)}${me ? ' (kamu)' : ''}</b><span class="rs"><span class="dot${p.online ? '' : ' off'}"></span>${p.ready ? '✅ Siap' : '⏳ Belum siap'}</span></div>`
+  : `<div class="sl" style="opacity:.5"><i style="background:#ffffff40">P${i + 1}</i><b>Menunggu pemain…</b></div>`;
+
+function showLobby() {
+  ol.className = '';
+  const v = V, me = v.players.find(p => p.id === v.myId), isM = v.side === 'master';
+  const slots = Array.from({ length: v.maxPlayers }, (_, i) => v.players[i]);
+  const link = location.origin + location.pathname + '?room=' + v.code;
+  const need = v.minPlayers;
+  let action;
+  if (v.isOwner) action = `<button class="b gr" id="st" ${v.canStart ? '' : 'disabled'}>▶ Mulai Permainan</button><p class="sm">${v.players.length < need ? 'Butuh minimal ' + need + ' pemain.' : (v.canStart ? 'Semua siap!' : 'Menunggu semua pemain siap.')}</p>`;
+  else action = `<button class="b ${me && me.ready ? 'gy' : 'gr'}" id="rd">${me && me.ready ? 'Batal siap' : '✔ Saya siap'}</button><p class="sm">Tunggu ${v.hasMaster && !v.masterLeft ? 'Room Master' : 'pemilik ruangan'} menekan Mulai.</p>`;
+  if (v.isOwner && !isM && !v.hasMaster) { /* host pemain: otomatis siap */ }
+  ol.innerHTML = `<div class="card"><div class="lg">${isM ? '👑 Room Master' : '🎮 Lobi Arena'}<small>${esc(v.myName || '')}</small></div>
+  <div class="sm">Kode ruangan</div><div class="codebox" id="cb">${esc(v.code)}</div>
+  <div class="rw"><button class="b gy" id="cl">🔗 Salin Tautan</button></div>
+  ${slots.map((p, i) => slotRow(i, p, p && p.id === v.myId)).join('')}
+  <div class="sm">${v.hasMaster ? '👑 Room Master: ' + esc(v.masterName) + (v.masterLeft ? ' (sudah keluar)' : '') : 'Pemain pertama jadi pemilik ruangan.'}</div>
+  ${action}
+  <div class="er" id="er"></div>
+  <button class="b gy" id="lv">Keluar</button></div>`;
+  const rd = $$('rd'); if (rd) rd.onclick = async () => { sfx(); try { applyView((await call('ready', { ready: !(me && me.ready) })).view); } catch (e) { handleErr(e); } };
+  const st = $$('st'); if (st) st.onclick = async () => { sfx(); st.disabled = true; try { applyView((await call('start')).view); } catch (e) { handleErr(e); st.disabled = false; } };
+  $$('cl').onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Tautan disalin'); } catch (e) { prompt('Salin tautan ini:', link); } };
+  $$('lv').onclick = leave;
+}
+
+async function leave() {
+  try { await call('leave'); } catch (e) { }
+  stopPolling(); stopStats(); clearSession(); location.reload();
+}
+
+function showWaiting() {
+  ol.className = '';
+  ol.innerHTML = `<div class="card"><div class="lg">⏳ Menunggu pemain lain<small>${V.players.filter(p => p.done).length}/${V.players.length} selesai</small></div>
+  ${V.players.map((p, i) => `<div class="sl${p.id === V.myId ? ' me' : ''}"><i>P${i + 1}</i><b>${esc(p.name)}</b><span class="rs">${p.done ? '✅ Selesai' : '🎯 Bermain'}</span></div>`).join('')}
+  <button class="b gy" id="lv">Keluar</button></div>`;
+  $$('lv').onclick = leave;
+}
+
+/* ---------- Room Master: pantauan langsung ---------- */
+function showMasterGrid() {
+  const v = V;
+  if (shownKey !== 'grid' + v.gameNo || !$$('mg')) {
+    ol.className = 'full'; shownKey = 'grid' + v.gameNo;
+    ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg"></div></div>`;
+    $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };
+  }
+  const done = v.players.filter(p => p.done).length;
+  $$('ms').textContent = done + '/' + v.players.length + ' pemain selesai';
+  $$('mg').innerHTML = v.players.map((p, i) => {
+    const s = p.stats || {}, q = Math.min(TOTAL_Q, s.q || 0);
+    let badge = '';
+    if (p.left) badge = '🚪 Keluar'; else if (p.done) badge = s.win === false && !p.stats ? '✅ Selesai' : '✅ Selesai'; else if (!p.online) badge = '🔌 Terputus';
+    return `<div class="tl${p.done ? ' fin' : ''}${!p.online && !p.done ? ' off' : ''}">
+      <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span>${'❤️'.repeat(Math.max(0, s.hearts == null ? 3 : s.hearts))}</span></div>
+      <div class="big">⭐ ${s.score || 0}</div>
+      <div class="pb"><div style="width:${Math.round(q / TOTAL_Q * 100)}%"></div></div>
+      <div class="tb"><span>Soal ${Math.min(TOTAL_Q, q + (p.done ? 0 : 1))}/${TOTAL_Q} · 🔥${s.streak || 0} · ✅${s.ok || 0}</span><span class="bd">${badge}</span></div></div>`;
+  }).join('');
+}
+
+/* ---------- papan skor akhir ---------- */
+function showRank() {
+  const v = V, r = v.ranking || [];
+  const rows = r.map((x, i) => `<tr class="${i ? '' : 'w'}${x.name === v.myName ? ' me' : ''}"><td>${['🥇', '🥈', '🥉'][i] || i + 1}</td><td class="n">${esc(x.name)}${x.win ? '' : (x.forfeit ? ' 🚪' : ' 💔')}</td><td class="s">${x.score}</td><td>${x.ok}/${TOTAL_Q}</td><td>${x.avgShots == null ? '-' : x.avgShots}</td><td>${x.avgTime == null ? '-' : x.avgTime + ' dtk'}</td><td>${x.base}</td><td>${x.bar}</td><td>${x.att}</td><td>${x.spd}</td></tr>`).join('');
+  const tie = r[1] && r[1].score === r[0].score;
+  ol.className = ''; shownKey = 'rank' + v.gameNo;
+  ol.innerHTML = `<div id="rk" style="display:contents"><div class="card" style="width:min(96vw,760px)"><div class="lg">🏆 Papan Skor Akhir</div>
+  <div class="tw"><table class="rt"><tr><th>#</th><th>Pemain</th><th>⭐ Skor</th><th>✅ Benar</th><th>Ø Tembakan</th><th>Ø Waktu</th><th>Poin jawab</th><th>🧱 Blok</th><th>🎯 Bonus tembak</th><th>⚡ Bonus cepat</th></tr>${rows}</table></div>
+  <div class="sm">${r[0] ? (tie ? '🤝 Seri di puncak: ' + esc(r[0].name) + ' & ' + esc(r[1].name) : '👑 Pemenang: ' + esc(r[0].name) + ' (' + r[0].score + ' poin)') : ''}</div>
+  ${v.isOwner ? '<button class="b gr" id="ag">↩ Main lagi (kembali ke lobi)</button>' : '<p class="sm">Menunggu pemilik ruangan untuk main lagi…</p>'}
+  <button class="b gy" id="lv">Keluar</button></div></div>`;
+  const ag = $$('ag'); if (ag) ag.onclick = async () => { ag.disabled = true; try { applyView((await call('again')).view); } catch (e) { handleErr(e); ag.disabled = false; } };
+  $$('lv').onclick = leave;
+}
+
+/* ---------- sisi pemain: main & kirim statistik ---------- */
+function freezeGame() { try { setP(true); } catch (e) { } }
+function startPlayer(seed) {
+  if (playing) return;
+  playing = true; overSent = false; overBusy = false;
+  ol.classList.add('hide');
+  document.body.classList.add('online');
+  window.openMenu = function () { };            // tanpa menu/pause saat online
+  // ---- soal, susunan blok & urutan burung sama untuk semua pemain (seed dari server) ----
+  const mb = a => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  seed = seed | 0; let birdRng = null;
+  const oSpawn = spawnRound, oRnd = rndBird, oNew = newRound, oResult = result;
+  window.spawnRound = function () {
+    const mr = Math.random; Math.random = mb(seed + (qIdx + 1) * 7919);
+    try { oSpawn(); } finally { Math.random = mr; }
+    birdRng = mb((seed ^ 0x9e3779b9) + (qIdx + 1) * 104729);   // urutan burung tergantung nomor soal
+    birds = Array.from({ length: 6 }, rndBird);
+  };
+  window.rndBird = function () { if (!birdRng) return oRnd(); const k = Object.keys(B); return k[Math.floor(birdRng() * k.length)]; };
+  window.newRound = function () { oNew(); if (st === 'ready' || st === 'drag') nextBird(); };
+  window.result = function (win) {
+    oResult(win);
+    const b = $$('ob'); if (b) { b.textContent = 'Menunggu pemain lain…'; b.onclick = null; b.disabled = true; }
+    sendOver();
+  };
+  players = [V.myName]; results = []; pi = 0; started = true;
+  beginTurn(); closeMenu();
+  sendStats(); statT = setInterval(sendStats, 2000);
+}
+const liveStats = () => {
+  const r = results[0];
+  return { score: r ? r.score : score, q: r ? r.ok : qIdx, hearts, streak, ms: playMs,
+    ok: r ? r.ok : PS.ok, wrong: r ? r.wrong : PS.wrong, shots: r ? r.shots : PS.shots, done: !!r, win: r ? r.win : false };
+};
+async function sendStats() {
+  if (!ON || overSent || !playing) return;
+  try {
+    const j = await call('stats', { stats: liveStats() });
+    failCount = 0;
+    if (V && (j.status !== 'playing' || j.gameNo !== V.gameNo)) pollOnce();
+  } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
+}
+async function sendOver() {
+  if (overBusy || overSent || !results[0]) return;
+  overBusy = true;
+  for (let i = 0; i < 20 && !overSent; i++) {
+    try { const j = await call('over', { result: results[0] }); overSent = true; stopStats(); applyView(j.view); }
+    catch (e) {
+      if (e.status === 409) { overSent = true; stopStats(); pollOnce(); break; }   // permainan sudah dihentikan / selesai
+      if (e.status === 401 || e.status === 404) { handleErr(e); break; }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+  overBusy = false;
+}
+function stopStats() { clearInterval(statT); statT = 0; }
+
+/* ---------- awal ---------- */
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ON) pollOnce(); });
+(async function init() {
+  const q = new URLSearchParams(location.search);
+  const roomParam = (q.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+  const saved = loadSession();
+  if (roomParam && !(saved && saved.code === roomParam)) menuForm.code = roomParam;
+  if (saved && (!roomParam || roomParam === saved.code)) {
+    ON = saved;
+    try {
+      const r = await fetch(API + '?' + new URLSearchParams({ code: ON.code, token: ON.token, v: 0 }), { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok && j.view && j.view.status !== 'abandoned') {
+        const v = j.view;
+        // permainan sedang berjalan & halaman dimuat ulang di tengah main: skor lokal hilang, jadi pemain dianggap gugur
+        if (v.side === 'player' && v.status === 'playing' && !v.players.find(p => p.id === v.myId).done) {
+          try { await call('leave'); } catch (e) { }
+          clearSession(); ON = null; menuErr = 'Halaman dimuat ulang saat bermain, jadi kamu dianggap keluar dari ronde ini. Gabung lagi di ronde berikutnya.'; render(); return;
+        }
+        applyView(v); startPolling(); return;
+      }
+    } catch (e) { /* jatuh ke menu */ }
+    clearSession(); ON = null; V = null;
+  }
+  render();
+})();
+})();
