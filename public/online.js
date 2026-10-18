@@ -45,6 +45,8 @@ style.textContent = `
 .tl .vw video{width:100%;height:100%;object-fit:contain;background:#000}
 .tl .vs{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;font-size:14px;color:#cfd8ff;background:#000a;pointer-events:none}
 .tl .vs.ok{display:none}
+.tl .fps{position:absolute;right:8px;top:6px;background:#000a;border-radius:8px;padding:2px 9px;font:800 14px ui-monospace,Menlo,monospace;color:#8f8;pointer-events:none}
+.tl .fps.mid{color:#ffd54f}.tl .fps.low{color:#ff8a80}.tl .fps.none{color:#aaa}
 .tl .sc{position:absolute;left:8px;top:6px;background:#000a;border-radius:8px;padding:2px 10px;font-size:22px;font-weight:900;color:#ffd54f;pointer-events:none}
 .tl .pb{height:6px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
 .tl .tb{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:#cfe;flex-wrap:wrap}
@@ -241,7 +243,7 @@ function waitIce(pc, ms) {
   });
 }
 function closeLink(id) { const l = links[id]; if (!l) return; try { l.pc.close(); } catch (e) { } delete links[id]; }
-function closeAllLinks() { Object.keys(links).forEach(closeLink); }
+function closeAllLinks() { Object.keys(links).forEach(closeLink); clearInterval(fpsT); fpsT = 0; }
 async function openLink(id) {
   if (typeof RTCPeerConnection === 'undefined') return;
   const prev = links[id], n = prev ? prev.n + 1 : 1, gNo = V.gameNo;
@@ -262,6 +264,28 @@ async function gotAnswer(id, a) {
   const l = links[id]; if (!l || !a || a.n !== l.n || l.an === a.n) return;
   l.an = a.n;
   try { await l.pc.setRemoteDescription({ type: 'answer', sdp: a.sdp }); } catch (e) { l.an = 0; }
+}
+/* FPS video yang benar-benar tampil di layar Master (dihitung per frame lewat requestVideoFrameCallback; cadangan: getStats) */
+let fpsT = 0, fpsN = {}, fpsLast = {};
+function startFps(players) {
+  clearInterval(fpsT); fpsN = {}; fpsLast = {};
+  players.forEach(p => {
+    const vid = $$('vd' + p.id); fpsN[p.id] = 0;
+    if (vid && vid.requestVideoFrameCallback) { const loop = () => { fpsN[p.id]++; vid.requestVideoFrameCallback(loop); }; vid.requestVideoFrameCallback(loop); }
+  });
+  fpsT = setInterval(async () => {
+    const now = performance.now();
+    for (const p of players) {
+      const el = $$('fp' + p.id); if (!el) continue;
+      const l = links[p.id], vid = $$('vd' + p.id); let fps = null;
+      if (l && l.ok) {
+        if (vid && vid.requestVideoFrameCallback) { const last = fpsLast[p.id]; if (last) fps = (fpsN[p.id] - last.n) * 1000 / (now - last.t); fpsLast[p.id] = { n: fpsN[p.id], t: now }; }
+        else { try { (await l.pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video' && r.framesPerSecond != null) fps = r.framesPerSecond; }); } catch (e) { } }
+      } else delete fpsLast[p.id];
+      el.className = 'fps ' + (fps == null ? 'none' : fps >= 50 ? '' : fps >= 30 ? 'mid' : 'low');
+      el.textContent = fps == null ? '— FPS' : Math.round(fps) + ' FPS';
+    }
+  }, 1000);
 }
 function updateLinkUI(id) {
   const vs = document.querySelector('#vs' + id), l = links[id]; if (!vs) return;
@@ -288,10 +312,11 @@ function showMasterGrid() {
     ol.className = 'full'; shownKey = 'grid' + v.gameNo;
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
-      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><video id="vd${p.id}" autoplay muted playsinline></video><div class="vs" id="vs${p.id}">📡 Menyambungkan video…</div><div class="sc" id="sc${p.id}">⭐ 0</div></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><video id="vd${p.id}" autoplay muted playsinline></video><div class="vs" id="vs${p.id}">📡 Menyambungkan video…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
       <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
       <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };
+    startFps(v.players);
     v.players.forEach(p => { $$('vw' + p.id).onclick = () => { const mg = $$('mg'), t = $$('tl' + p.id), on = !t.classList.contains('zm'); mg.querySelectorAll('.tl').forEach(x => x.classList.remove('zm')); mg.classList.toggle('focus', on); if (on) t.classList.add('zm'); }; });
   }
   const done = v.players.filter(p => p.done).length;
@@ -392,11 +417,11 @@ async function answerOffer(offer) {
   if (sendBusy || typeof RTCPeerConnection === 'undefined') return;
   sendBusy = true; stopBroadcast();
   try {
-    const stream = document.getElementById('c').captureStream(20);
+    const stream = document.getElementById('c').captureStream(60);
     const pc = sendPC = new RTCPeerConnection(ICE);
-    stream.getTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (e) { } pc.addTrack(t, stream); });
+    stream.getTracks().forEach(t => { try { t.contentHint = 'motion';  } catch (e) { } pc.addTrack(t, stream); });
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
-    pc.getSenders().forEach(sn => { try { const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}]; pr.encodings[0].maxBitrate = 800000; pr.encodings[0].scaleResolutionDownBy = 1.5; sn.setParameters(pr).catch(() => { }); } catch (e) { } });
+    pc.getSenders().forEach(sn => { try { const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}]; pr.encodings[0].maxBitrate = 2000000; pr.encodings[0].maxFramerate = 60; pr.degradationPreference = 'maintain-framerate'; pr.encodings[0].scaleResolutionDownBy = 1.5; sn.setParameters(pr).catch(() => { }); } catch (e) { } });
     await pc.setLocalDescription(await pc.createAnswer());
     await waitIce(pc, 3500);
     if (sendPC !== pc) return;

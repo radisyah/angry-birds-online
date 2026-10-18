@@ -16,11 +16,11 @@ Room Master ────┼─ polling ─ /api/room ───┤
 - **Buat Ruangan** (pembuat = Pemain 1 & pemilik) atau **Jadi Room Master** (hanya memantau, tidak bermain). Teman bergabung dengan kode / tombol *Salin Tautan* (`?room=KODE`).
 - 2–4 pemain. Pemain menekan *Saya siap*; pemilik (Room Master bila ada, kalau tidak Pemain 1) menekan *Mulai*.
 - Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**
-  (video canvas game, lengkap dengan soal & HUD, 640×360 ±20 fps) plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain.
+  (video canvas game, lengkap dengan soal & HUD, 640×360, target 60 fps, FPS aktual tampil di pojok kanan atas tiap video) plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain.
   Master juga bisa *Hentikan permainan*.
 - **Cara siaran video:** WebRTC peer-to-peer. Server (Vercel) hanya menukar pesan sinyal (offer/answer, ±2 perintah Redis per pemain), video **tidak**
   lewat server sehingga tidak menambah biaya. Memakai STUN Google; bila jaringan pemain/master memblokir P2P (NAT ketat, wifi sekolah/kantor),
-  kartu itu menampilkan "Video tidak bisa tersambung" dan skor tetap tampil. Untuk jaringan seperti itu tambahkan server TURN di `ICE` (`public/online.js`).
+  FPS yang tampil = frame yang benar-benar sampai di layar Master; bisa di bawah 60 bila perangkat pemain 30 Hz/lambat meng-encode atau bandwidth kurang. Bila jaringan memblokir P2P, kartu menampilkan "Video tidak bisa tersambung" dan skor tetap tampil. Untuk jaringan seperti itu tambahkan server TURN di `ICE` (`public/online.js`).
 - Setelah semua pemain selesai → papan skor akhir. Pemilik bisa *Main lagi* (kembali ke lobi, seed baru).
 - Pemain keluar / terputus > 45 dtk tanpa statistik / dihentikan Master → dihitung gugur dengan skor terakhir. Batas keras satu permainan 30 menit.
 - Muat ulang halaman di tengah bermain = dianggap keluar dari ronde itu (skor lokal hilang). Di lobi & papan skor, sesi otomatis tersambung kembali.

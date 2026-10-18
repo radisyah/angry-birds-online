@@ -67,7 +67,11 @@ try:
         check('Room Master melihat video gameplay kedua pemain', True)
         sz = M.evaluate("[...document.querySelectorAll('#mg video')].map(v=>v.videoWidth+'x'+v.videoHeight)")
         print('    ukuran video:', sz)
-        M.wait_for_timeout(1500)
+        M.wait_for_function("[...document.querySelectorAll('#mg .fps')].every(e=>/^\\d+ FPS$/.test(e.textContent))", timeout=10000)
+        M.wait_for_timeout(3000)
+        fps = M.evaluate("[...document.querySelectorAll('#mg .fps')].map(e=>e.textContent)")
+        print('    FPS di master:', fps)
+        check('master menampilkan FPS tiap video', all(f.endswith(' FPS') and f[0].isdigit() for f in fps), fps)
         M.screenshot(path=SHOTS + '/3-master-grid.png')
         A.screenshot(path=SHOTS + '/4-player-game.png')
 
