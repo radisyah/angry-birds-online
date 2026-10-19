@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1433">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Math Birds">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="icon" href="/icon-192.png">
 <title>Angry Birds — Math Edition Online</title>
 <style>
 :root{--bg:#f3efe6;--fg:#2a2118;--card:#fff;--ac:#d62828}
@@ -600,11 +603,21 @@ $('rs').onclick=()=>{ov(null);load(lvl)};$('pz').onclick=()=>setP(!paused);
 // ---- menu, layar penuh ----
 let started=false;
 const setP=v=>{paused=v;A.duck(v);$('pz').textContent=paused?'▶':'⏸'};
-const isFS=()=>document.fullscreenElement||document.webkitFullscreenElement,appEl=$('app'),canFS=!!(appEl.requestFullscreen||appEl.webkitRequestFullscreen);
-function toggleFS(){try{if(isFS())(document.exitFullscreen||document.webkitExitFullscreen).call(document);else if(canFS){const p=(appEl.requestFullscreen||appEl.webkitRequestFullscreen).call(appEl);if(p&&p.catch)p.catch(()=>{});try{screen.orientation.lock('landscape').catch(()=>{})}catch(e){}}}catch(e){}}
+const isFS=()=>document.fullscreenElement||document.webkitFullscreenElement,appEl=$('app'),rootEl=document.documentElement,canFS=!!(rootEl.requestFullscreen||rootEl.webkitRequestFullscreen);
+/* Layar penuh memakai <html> (bukan #app) agar lobi, layar Room Master, dan game semuanya ikut layar penuh. */
+function enterFS(){if(isFS()||!canFS)return;try{const p=(rootEl.requestFullscreen||rootEl.webkitRequestFullscreen).call(rootEl,{navigationUI:'hide'});if(p&&p.catch)p.catch(()=>{})}catch(e){}}
+function toggleFS(){try{if(isFS())(document.exitFullscreen||document.webkitExitFullscreen).call(document);else enterFS()}catch(e){}}
+['fullscreenchange','webkitfullscreenchange'].forEach(ev=>document.addEventListener(ev,()=>{try{if(isFS()){fsArm=false;if(screen.orientation&&screen.orientation.lock)screen.orientation.lock('landscape').catch(()=>{})}else if(screen.orientation&&screen.orientation.unlock)screen.orientation.unlock()}catch(e){}}));
+/* Layar penuh otomatis: browser hanya mengizinkannya setelah sentuhan/klik pengguna, jadi dipasang pada sentuhan PERTAMA di mana pun
+   (menu, buat/gabung ruangan, siap, mulai) — praktis sejak awal game. Keluar manual tidak dipaksa lagi sampai ronde berikutnya (window.armFS()). */
+let fsArm=true;window.armFS=()=>{fsArm=true};
+['pointerup','touchend','click','keydown'].forEach(ev=>document.addEventListener(ev,()=>{if(fsArm&&canFS&&!isFS())enterFS()},true));
+/* iPhone/iPod Safari tidak punya API layar penuh untuk halaman web: satu-satunya jalan = "Tambah ke Layar Utama" (manifest sudah display: fullscreen). */
+const iosNoFS=/iPhone|iPod/.test(navigator.userAgent)&&!canFS&&!navigator.standalone;
+if(iosNoFS&&!sessionStorage.getItem('fsHint')){try{sessionStorage.setItem('fsHint','1')}catch(e){}setTimeout(()=>{const t=document.createElement('div');t.style.cssText='position:fixed;left:50%;bottom:6%;transform:translateX(-50%);z-index:99999;max-width:86%;background:#fff;color:#2a2118;border-radius:12px;padding:10px 14px;font:700 14px system-ui;text-align:center;box-shadow:0 4px 18px #0006';t.textContent='Layar penuh di iPhone: ketuk Bagikan ⬆ lalu "Tambah ke Layar Utama", buka dari ikon itu.';document.body.appendChild(t);setTimeout(()=>t.remove(),7000)},1500)}
 function openMenu(){setP(true);$('guide').style.display='none';$('home').style.display='flex';$('go').textContent=started&&!done?'▶ Lanjutkan':(started?'▶ Main Lagi':'▶ Mulai Main');$('menu').style.display='flex'}
 function closeMenu(){$('menu').style.display='none';setP($('ov').style.display==='flex'&&!done)}
-function startLevel(){A.init();players=players.map((n,i)=>(n||'').trim()||'Peserta '+(i+1));renderPl();results=[];pi=0;started=true;beginTurn();closeMenu();if(canFS&&!isFS())toggleFS()}
+function startLevel(){A.init();players=players.map((n,i)=>(n||'').trim()||'Peserta '+(i+1));renderPl();results=[];pi=0;started=true;beginTurn();closeMenu();enterFS()}
 function theme(){night=!night;document.documentElement.dataset.theme=night?'dark':'light'}
 $('go').onclick=()=>started&&!done?closeMenu():startLevel(0);
 $('gd').onclick=()=>{$('home').style.display='none';$('guide').style.display='flex'};

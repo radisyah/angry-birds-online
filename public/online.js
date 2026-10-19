@@ -338,7 +338,7 @@ function showMasterGrid() {
   const v = V;
   if (shownKey !== 'grid' + v.gameNo || !$$('mg')) {
     closeAllLinks();
-    ol.className = 'full'; shownKey = 'grid' + v.gameNo;
+    ol.className = 'full'; shownKey = 'grid' + v.gameNo; if (window.armFS) window.armFS();
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
       <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><video id="vd${p.id}" autoplay muted playsinline></video><div class="vs" id="vs${p.id}">📡 Menyambungkan video…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
@@ -384,6 +384,7 @@ function showRank() {
 /* ---------- sisi pemain: main & kirim statistik ---------- */
 function freezeGame() { try { setP(true); } catch (e) { } }
 function startPlayer(seed) {
+  if (window.armFS) window.armFS();   // sentuhan pertama di ronde ini masuk layar penuh lagi bila sempat keluar
   if (playing) return;
   playing = true; overSent = false; overBusy = false;
   ol.classList.add('hide');

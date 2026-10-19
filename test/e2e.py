@@ -67,7 +67,7 @@ try:
         check('Room Master melihat video gameplay kedua pemain', True)
         sz = M.evaluate("[...document.querySelectorAll('#mg video')].map(v=>v.videoWidth+'x'+v.videoHeight)")
         print('    ukuran video:', sz)
-        check('video siaran dibatasi 360p (640x360)', all(x == '640x360' for x in sz), sz)
+        check('video siaran dibatasi maks. 360p (640x360; boleh turun otomatis bila CPU/jaringan lemah)', all(int(x.split('x')[0]) <= 640 and int(x.split('x')[1]) <= 360 and x != '0x0' for x in sz), sz)
         M.wait_for_function("[...document.querySelectorAll('#mg .fps')].every(e=>/^\\d+ FPS$/.test(e.textContent))", timeout=10000)
         M.wait_for_timeout(3000)
         fps = M.evaluate("[...document.querySelectorAll('#mg .fps')].map(e=>e.textContent)")
