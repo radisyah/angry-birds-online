@@ -162,6 +162,30 @@ const fin = (score, extra) => Object.assign({ score, win: true, ok: 15, wrong: 1
     const pv = await state(m.code, a.token); assert(!JSON.stringify(pv.view).includes('ANSWER-A'));                       // pemain tidak menerima jawaban
     const old = await api('GET', null, { code: m.code, token: m.token, v: 0, g: g + 5 }); assert(!old.view.sigs);          // gameNo lain: kosong
   });
+  await T('daftar ICE: hanya untuk sesi sah; tanpa TURN = STUN saja; dengan TURN statis/HMAC ada relay', async () => {
+    const ice = require('../lib/ice.js');
+    const h = await post('create', { name: 'Ice' });
+    assert.strictEqual((await api('GET', null, { action: 'ice', code: h.code, token: 'salah' })).http, 401);
+    const r = await api('GET', null, { action: 'ice', code: h.code, token: h.token });
+    assert(r.ok && Array.isArray(r.iceServers) && r.iceServers[0].urls[0].startsWith('stun:'));
+    assert.strictEqual(r.relay, process.env.CF_TURN_KEY_ID || process.env.METERED_API_KEY || process.env.TURN_URLS ? r.relay : false);
+    ice._resetForTests();
+    const st = await ice.getIceServers({ TURN_URLS: 'turn:t.example.com:3478, turns:t.example.com:443?transport=tcp', TURN_USERNAME: 'u', TURN_CREDENTIAL: 'p' });
+    assert(st.relay && st.iceServers[1].username === 'u' && st.iceServers[1].urls.length === 2);
+    ice._resetForTests();
+    const hm = await ice.getIceServers({ TURN_URLS: 'turn:t.example.com:3478', TURN_SECRET: 's3' });
+    assert(hm.relay && /^\d+:abm$/.test(hm.iceServers[1].username) && hm.iceServers[1].credential.length > 10);
+    ice._resetForTests();
+    const cf = await ice.getIceServers({ CF_TURN_KEY_ID: 'k', CF_TURN_API_TOKEN: 't' }, async (u, o) => {
+      assert(u.includes('/turn/keys/k/credentials/generate-ice-servers') && o.headers.Authorization === 'Bearer t');
+      return { ok: true, json: async () => ({ iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.cloudflare.com:53'] }, { urls: ['turn:turn.cloudflare.com:3478?transport=udp', 'turn:turn.cloudflare.com:53?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'], username: 'cu', credential: 'cc' }] }) };
+    });
+    assert(cf.relay && cf.iceServers.length === 3 && !JSON.stringify(cf.iceServers).includes(':53'));
+    ice._resetForTests();
+    const bad = await ice.getIceServers({ METERED_DOMAIN: 'a.metered.live', METERED_API_KEY: 'x' }, async () => ({ ok: false, status: 500 }));
+    assert(!bad.relay && bad.iceServers.length === 1);   // penyedia gagal: tetap STUN, tidak crash
+    ice._resetForTests();
+  });
   await T('polling tanpa perubahan membalas kecil (unchanged)', async () => {
     const h = await post('create', { name: 'Q' }); const v = await state(h.code, h.token, 0);
     const u = await state(h.code, h.token, v.view.v); assert(u.unchanged && u.v === v.view.v && u.online);

@@ -2,6 +2,7 @@
 const crypto = require('crypto');
 const core = require('../public/game-core.js');
 const { getStore } = require('../lib/store.js');
+const { getIceServers } = require('../lib/ice.js');
 
 const TTL = 6 * 3600;            // room hilang 6 jam setelah aktivitas terakhir
 const PRES_TTL = 20;             // detik; tanda hadir di lobi (diperbarui tiap polling)
@@ -322,6 +323,15 @@ async function actState(q) {
   return { view };
 }
 
+/* Daftar STUN/TURN untuk WebRTC. Hanya untuk sesi yang sah di ruangan (kredensial TURN tidak dibagikan ke sembarang orang). */
+async function actIce(q) {
+  const code = normCode(q.code), store = getStore();
+  const room = parse(await store.cmd(['GET', roomKey(code)]));
+  if (!room) throw fail(404, 'Ruangan tidak ditemukan atau sudah kedaluwarsa.');
+  seatOf(room, String(q.token || ''));
+  return getIceServers();
+}
+
 /* ---------- handler HTTP (Vercel) ---------- */
 function readBody(req) {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -332,7 +342,7 @@ module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   try {
     let out;
-    if (req.method === 'GET') out = await actState(req.query || {});
+    if (req.method === 'GET') out = (req.query && req.query.action === 'ice') ? await actIce(req.query) : await actState(req.query || {});
     else if (req.method === 'POST') {
       const b = readBody(req);
       const acts = { create: actCreate, join: actJoin, ready: actReady, start: actStart, stop: actStop, again: actAgain, leave: actLeave, stats: actStats, over: actOver, signal: actSignal };

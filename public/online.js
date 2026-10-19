@@ -106,7 +106,10 @@ function stopPolling() { if (pollTimer) clearTimeout(pollTimer); pollTimer = nul
 function pollDelay() {
   if (document.hidden) return 4000;
   if (!V) return 1000;
-  if (V.status === 'playing') return V.side === 'master' ? 1500 : 2000;
+  if (V.status === 'playing') {
+    if (V.side === 'master') return Object.keys(links).length < V.players.filter(p => !p.done && !p.left).length || Object.keys(links).some(k => !links[k].ok) ? 600 : 1500;   // cepat selama video belum tersambung
+    return 2000;
+  }
   return 1000;
 }
 function startPolling() {
@@ -231,16 +234,40 @@ function showWaiting() {
 }
 
 /* ---------- Room Master: siaran gameplay langsung (WebRTC, video P2P dari canvas tiap pemain) ---------- */
-const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
-const LINK_RETRY_MS = 14000;
+const STUN_ONLY = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }], relay: false };
+const VID = { w: 640, h: 360, fps: 30, kbps: 800 };   // batas siaran: 360p, 30 fps
+const LINK_RETRY_MS = 9000, LINK_MAX_TRIES = 8;
+let icePromise = null;
+/* STUN + TURN dari server (TURN = relay agar video sampai di semua jaringan). Gagal → STUN saja. */
+function getIce() {
+  if (!icePromise) icePromise = (async () => {
+    try {
+      const r = await fetch(API + '?' + new URLSearchParams({ action: 'ice', code: ON.code, token: ON.token }), { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok && j.iceServers && j.iceServers.length) return { iceServers: j.iceServers, relay: !!j.relay, iceCandidatePoolSize: 2 };
+    } catch (e) { }
+    icePromise = null;   // coba lagi pada tautan berikutnya
+    return STUN_ONLY;
+  })();
+  return icePromise;
+}
+let iceRelay = true;
 let links = {};          // id -> { pc, n, an (jawaban terakhir yang diproses), t (mulai), ok, stream }
-function waitIce(pc, ms) {
+function waitIce(pc, ms, needRelay) {
   return new Promise(res => {
     if (pc.iceGatheringState === 'complete') return res();
-    const done = () => { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', ch); res(); };
+    let rt = 0;
+    const done = () => { clearTimeout(t); clearTimeout(rt); pc.removeEventListener('icegatheringstatechange', ch); pc.removeEventListener('icecandidate', cd); res(); };
     const ch = () => { if (pc.iceGatheringState === 'complete') done(); };
-    const t = setTimeout(done, ms); pc.addEventListener('icegatheringstatechange', ch);
+    // ada kandidat relay (TURN) → cukup tunggu sebentar agar kandidat lain ikut, tidak perlu menunggu semua server
+    const cd = ev => { if (needRelay && ev.candidate && ev.candidate.type === 'relay' && !rt) rt = setTimeout(done, 350); };
+    const t = setTimeout(done, ms); pc.addEventListener('icegatheringstatechange', ch); pc.addEventListener('icecandidate', cd);
   });
+}
+/* Tekan latensi sisi penerima (Master): buffer jitter sekecil mungkin */
+function lowLatency(recv) {
+  try { if ('jitterBufferTarget' in recv) recv.jitterBufferTarget = 0; } catch (e) { }
+  try { if ('playoutDelayHint' in recv) recv.playoutDelayHint = 0; } catch (e) { }
 }
 function closeLink(id) { const l = links[id]; if (!l) return; try { l.pc.close(); } catch (e) { } delete links[id]; }
 function closeAllLinks() { Object.keys(links).forEach(closeLink); clearInterval(fpsT); fpsT = 0; }
@@ -248,13 +275,15 @@ async function openLink(id) {
   if (typeof RTCPeerConnection === 'undefined') return;
   const prev = links[id], n = prev ? prev.n + 1 : 1, gNo = V.gameNo;
   if (prev) { try { prev.pc.close(); } catch (e) { } }
-  const pc = new RTCPeerConnection(ICE), l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true };
+  const ice = await getIce(); iceRelay = ice.relay;
+  if (!V || V.gameNo !== gNo) return;
+  const pc = new RTCPeerConnection(ice), l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true };
   pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.ontrack = ev => { const vid = document.querySelector('#vd' + id); if (vid) { vid.srcObject = ev.streams[0] || new MediaStream([ev.track]); vid.play().catch(() => { }); } };
+  pc.ontrack = ev => { lowLatency(ev.receiver); const vid = document.querySelector('#vd' + id); if (vid) { vid.srcObject = ev.streams[0] || new MediaStream([ev.track]); vid.play().catch(() => { }); } };
   pc.onconnectionstatechange = () => { l.ok = pc.connectionState === 'connected'; updateLinkUI(id); };
   try {
     await pc.setLocalDescription(await pc.createOffer());
-    await waitIce(pc, 3500);
+    await waitIce(pc, 4000, ice.relay);
     if (links[id] !== l || !V || V.gameNo !== gNo) return;
     await call('signal', { kind: 'offer', to: id, n, sdp: pc.localDescription.sdp });
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
@@ -282,7 +311,7 @@ function startFps(players) {
         if (vid && vid.requestVideoFrameCallback) { const last = fpsLast[p.id]; if (last) fps = (fpsN[p.id] - last.n) * 1000 / (now - last.t); fpsLast[p.id] = { n: fpsN[p.id], t: now }; }
         else { try { (await l.pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video' && r.framesPerSecond != null) fps = r.framesPerSecond; }); } catch (e) { } }
       } else delete fpsLast[p.id];
-      el.className = 'fps ' + (fps == null ? 'none' : fps >= 50 ? '' : fps >= 30 ? 'mid' : 'low');
+      el.className = 'fps ' + (fps == null ? 'none' : fps >= 26 ? '' : fps >= 18 ? 'mid' : 'low');
       el.textContent = fps == null ? '— FPS' : Math.round(fps) + ' FPS';
     }
   }, 1000);
@@ -291,7 +320,7 @@ function updateLinkUI(id) {
   const vs = document.querySelector('#vs' + id), l = links[id]; if (!vs) return;
   const vid = document.querySelector('#vd' + id), ok = (l && l.ok) || (!l && vid && vid.srcObject);   // tanpa tautan tapi ada gambar terakhir: tetap tampil
   vs.className = 'vs' + (ok ? ' ok' : '');
-  if (!ok) vs.textContent = !l ? 'Video tidak tersedia' : (l.n > 2 ? '📡 Video tidak bisa tersambung (jaringan pemain memblokir). Skor tetap tampil.' : '📡 Menyambungkan video…');
+  if (!ok) vs.textContent = !l ? 'Video tidak tersedia' : (l.n > 2 ? (iceRelay ? '📡 Video belum tersambung, mencoba lagi… Skor tetap tampil.' : '📡 Video tidak bisa tersambung: server TURN belum diatur (lihat README). Skor tetap tampil.') : '📡 Menyambungkan video…');
 }
 function maintainLinks(v) {
   v.players.forEach(p => {
@@ -300,7 +329,7 @@ function maintainLinks(v) {
     if (!active) { if (l && (p.done || p.left)) { closeLink(p.id); updateLinkUI(p.id); } return; }
     if (!l) { openLink(p.id); return; }
     const bad = ['failed', 'disconnected', 'closed'].includes(l.pc.connectionState);
-    if (!l.ok && !l.busy && (bad || Date.now() - l.t > LINK_RETRY_MS) && l.n < 6) { openLink(p.id); }
+    if (!l.ok && !l.busy && (bad || Date.now() - l.t > LINK_RETRY_MS) && l.n < LINK_MAX_TRIES) { openLink(p.id); }
     else if (l.ok && bad) { l.ok = false; openLink(p.id); }
   });
 }
@@ -379,7 +408,7 @@ function startPlayer(seed) {
   };
   players = [V.myName]; results = []; pi = 0; started = true;
   beginTurn(); closeMenu();
-  sendStats(); statT = setInterval(sendStats, 2000);
+  sendStats(); statT = setInterval(sendStats, 2000); fastOfferCheck(); getIce();
 }
 const liveStats = () => {
   const r = results[0];
@@ -410,25 +439,56 @@ async function sendOver() {
 }
 function stopStats() { clearInterval(statT); statT = 0; }
 
-/* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC) ---------- */
-let sendPC = null, sendN = 0, sendBusy = false;
-function stopBroadcast() { if (sendPC) { try { sendPC.close(); } catch (e) { } } sendPC = null; }
+/* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC, 360p · 30 fps) ---------- */
+let sendPC = null, sendN = 0, sendBusy = false, feed = null, fastT = 0;
+/* Kanvas game 960×540 diperkecil ke 640×360 (360p) dan diambil 30 fps: ringan di HP pemain & tidak membebani Master. */
+function makeFeed() {
+  if (feed) return feed;
+  const src = document.getElementById('c'), cv = document.createElement('canvas'); cv.width = VID.w; cv.height = VID.h;
+  const g = cv.getContext('2d', { alpha: false }), every = 1000 / VID.fps - 3; let last = 0, raf = 0, on = true;
+  const draw = t => {
+    if (!on) return; raf = requestAnimationFrame(draw);
+    if (t - last < every) return; last = t;
+    try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }
+  };
+  g.drawImage(src, 0, 0, VID.w, VID.h); raf = requestAnimationFrame(draw);
+  const stream = cv.captureStream(VID.fps);
+  stream.getVideoTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (e) { } });
+  return feed = { stream, stop() { on = false; cancelAnimationFrame(raf); stream.getTracks().forEach(t => t.stop()); } };
+}
+function stopBroadcast() {
+  if (sendPC) { try { sendPC.close(); } catch (e) { } } sendPC = null;
+  if (feed) { feed.stop(); feed = null; }
+  clearInterval(fastT); fastT = 0;
+}
 async function answerOffer(offer) {
   if (sendBusy || typeof RTCPeerConnection === 'undefined') return;
-  sendBusy = true; stopBroadcast();
+  sendBusy = true;
   try {
-    const stream = document.getElementById('c').captureStream(60);
-    const pc = sendPC = new RTCPeerConnection(ICE);
-    stream.getTracks().forEach(t => { try { t.contentHint = 'motion';  } catch (e) { } pc.addTrack(t, stream); });
+    const ice = await getIce();
+    if (sendPC) { try { sendPC.close(); } catch (e) { } sendPC = null; }
+    const stream = makeFeed().stream;
+    const pc = sendPC = new RTCPeerConnection(ice);
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
-    pc.getSenders().forEach(sn => { try { const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}]; pr.encodings[0].maxBitrate = 2000000; pr.encodings[0].maxFramerate = 60; pr.degradationPreference = 'maintain-framerate'; pr.encodings[0].scaleResolutionDownBy = 1.5; sn.setParameters(pr).catch(() => { }); } catch (e) { } });
+    pc.getSenders().forEach(sn => { try {
+      const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}];
+      Object.assign(pr.encodings[0], { maxBitrate: VID.kbps * 1000, maxFramerate: VID.fps, scaleResolutionDownBy: 1, priority: 'high', networkPriority: 'high' });
+      pr.degradationPreference = 'maintain-framerate';   // jaringan lemah: turunkan kualitas gambar, bukan fps/delay
+      sn.setParameters(pr).catch(() => { });
+    } catch (e) { } });
     await pc.setLocalDescription(await pc.createAnswer());
-    await waitIce(pc, 3500);
+    await waitIce(pc, 4000, ice.relay);
     if (sendPC !== pc) return;
     await call('signal', { kind: 'answer', n: offer.n, sdp: pc.localDescription.sdp });
     sendN = offer.n;
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
-  sendBusy = false;
+  finally { sendBusy = false; }
+}
+/* Sebelum video tersambung, pemain mengecek penawaran Master lebih sering (0,7 dtk) supaya gambar muncul cepat. */
+function fastOfferCheck() {
+  clearInterval(fastT); let n = 0;
+  fastT = setInterval(() => { if (!playing || overSent || sendN > 0 || ++n > 40) { clearInterval(fastT); fastT = 0; return; } sendStats(); }, 700);
 }
 
 /* ---------- awal ---------- */

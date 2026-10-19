@@ -16,11 +16,24 @@ Room Master ────┼─ polling ─ /api/room ───┤
 - **Buat Ruangan** (pembuat = Pemain 1 & pemilik) atau **Jadi Room Master** (hanya memantau, tidak bermain). Teman bergabung dengan kode / tombol *Salin Tautan* (`?room=KODE`).
 - 2–4 pemain. Pemain menekan *Saya siap*; pemilik (Room Master bila ada, kalau tidak Pemain 1) menekan *Mulai*.
 - Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**
-  (video canvas game, lengkap dengan soal & HUD, 640×360, target 60 fps, FPS aktual tampil di pojok kanan atas tiap video) plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain.
-  Master juga bisa *Hentikan permainan*.
-- **Cara siaran video:** WebRTC peer-to-peer. Server (Vercel) hanya menukar pesan sinyal (offer/answer, ±2 perintah Redis per pemain), video **tidak**
-  lewat server sehingga tidak menambah biaya. Memakai STUN Google; bila jaringan pemain/master memblokir P2P (NAT ketat, wifi sekolah/kantor),
-  FPS yang tampil = frame yang benar-benar sampai di layar Master; bisa di bawah 60 bila perangkat pemain 30 Hz/lambat meng-encode atau bandwidth kurang. Bila jaringan memblokir P2P, kartu menampilkan "Video tidak bisa tersambung" dan skor tetap tampil. Untuk jaringan seperti itu tambahkan server TURN di `ICE` (`public/online.js`).
+  (video canvas game lengkap dengan soal & HUD, **360p = 640×360, 30 fps**, ±800 kbps per pemain; FPS aktual tampil di pojok kanan atas tiap video)
+  plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain. Master juga bisa *Hentikan permainan*.
+- **Cara siaran video:** WebRTC peer-to-peer (latensi ±0,1–0,3 dtk, buffer jitter penerima diset 0). Server (Vercel) hanya menukar pesan sinyal
+  (offer/answer), video **tidak** lewat server. Jaringan lemah → kualitas gambar yang turun, bukan FPS/delay (`maintain-framerate`).
+  Penyambungan dipercepat: Master & pemain mengecek sinyal tiap ±0,6–0,7 dtk sampai video tersambung (biasanya < 3 dtk), lalu kembali normal.
+- **Agar Master bisa melihat dari SEMUA jaringan (4G/CGNAT, wifi sekolah/kantor, NAT ketat) wajib mengaktifkan server TURN (relay).**
+  STUN saja hanya menembus sebagian jaringan. Pilih salah satu dan isi di Vercel → Settings → Environment Variables, lalu Redeploy:
+
+  | Penyedia | Variabel |
+  |---|---|
+  | **Cloudflare Realtime TURN** (gratis 1 TB/bln, paling mudah) | `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` |
+  | Metered.ca | `METERED_DOMAIN` (mis. `namaapp.metered.live`), `METERED_API_KEY` |
+  | coturn sendiri (static-auth-secret) | `TURN_URLS` (pisah koma), `TURN_SECRET` |
+  | TURN statis | `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` |
+
+  Kredensial diberikan server hanya ke peserta ruangan (`GET /api/room?action=ice`). Tanpa TURN, kartu video menampilkan
+  "server TURN belum diatur" bila jaringan memblokir P2P; skor tetap tampil. Lalu-lintas video yang lewat relay dihitung ke kuota penyedia
+  (≈ 0,8 Mbps × 4 pemain ≈ 1,4 GB per jam bila semua lewat relay).
 - Setelah semua pemain selesai → papan skor akhir. Pemilik bisa *Main lagi* (kembali ke lobi, seed baru).
 - Pemain keluar / terputus > 45 dtk tanpa statistik / dihentikan Master → dihitung gugur dengan skor terakhir. Batas keras satu permainan 30 menit.
 - Muat ulang halaman di tengah bermain = dianggap keluar dari ronde itu (skor lokal hilang). Di lobi & papan skor, sesi otomatis tersambung kembali.
@@ -38,7 +51,7 @@ Bila Redis belum terhubung, API membalas: *"Database belum dikonfigurasi…"*.
 ```bash
 node dev-server.js        # http://localhost:3000 (penyimpanan memori, hanya untuk pengembangan)
 npm test                  # 18 tes API: lewat memori DAN lewat jalur Redis REST (server tiruan format Upstash)
-python3 test/e2e.py       # 3 browser Chromium: Room Master + 2 pemain (pip install playwright && playwright install chromium)
+python3 test/e2e.py       # (cek juga 640×360 & ≤30 fps) 3 browser Chromium: Room Master + 2 pemain (pip install playwright && playwright install chromium)
 ```
 Game memuat `matter-js` dari cdnjs (seperti file aslinya). `test/e2e.py` memakai pengganti tanpa fisika (`test/matter-stub.js`) bila matter-js tidak tersedia.
 
