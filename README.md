@@ -18,8 +18,8 @@ Room Master ────┼─ polling ─ /api/room ───┤
 - Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**
   (video canvas game lengkap dengan soal & HUD, **360p = 640×360, 30 fps**, ±800 kbps per pemain; FPS aktual tampil di pojok kanan atas tiap video)
   plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain. Master juga bisa *Hentikan permainan*.
-- **Cara siaran video:** WebRTC peer-to-peer (latensi ±0,1–0,3 dtk, buffer jitter penerima diset 0). Server (Vercel) hanya menukar pesan sinyal
-  (offer/answer), video **tidak** lewat server. Jaringan lemah → kualitas gambar yang turun, bukan FPS/delay (`maintain-framerate`).
+- **Cara siaran video:** WebRTC peer-to-peer (latensi ±0,1–0,3 dtk, buffer jitter penerima kecil ±150 ms agar 30 fps rata). Server (Vercel) hanya menukar pesan sinyal
+  (offer/answer), video **tidak** lewat server. Jaringan lemah → resolusi gambar yang turun bertahap (640×360 → 160×90, diatur otomatis oleh pemain tiap 1 dtk), bukan FPS (`contentHint = "motion"` + `maintain-framerate`; frame diambil tiap 33,3 ms dengan `requestFrame()`).
   Penyambungan dipercepat: Master & pemain mengecek sinyal tiap ±0,6–0,7 dtk sampai video tersambung (biasanya < 3 dtk), lalu kembali normal.
 - **Agar Master bisa melihat dari SEMUA jaringan (4G/CGNAT, wifi sekolah/kantor, NAT ketat) wajib mengaktifkan server TURN (relay).**
   STUN saja hanya menembus sebagian jaringan. Pilih salah satu dan isi di Vercel → Settings → Environment Variables, lalu Redeploy:

@@ -235,7 +235,9 @@ function showWaiting() {
 
 /* ---------- Room Master: siaran gameplay langsung (WebRTC, video P2P dari canvas tiap pemain) ---------- */
 const STUN_ONLY = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }], relay: false };
-const VID = { w: 640, h: 360, fps: 30, kbps: 800 };   // batas siaran: 360p, 30 fps
+const VID = { w: 640, h: 360, fps: 30, kbps: 800, jitterMs: 150 };   // batas siaran: 360p, 30 fps; jitterMs = buffer kecil di Master agar 30 fps stabil
+const SCALES = [1, 1.5, 2, 3, 4];   // 640×360 → 427×240 → 320×180 → 213×120 → 160×90 (urutan resolusi yang dikorbankan, FPS tetap 30)
+let adaptLv = 0, adaptT = 0;
 const LINK_RETRY_MS = 9000, LINK_MAX_TRIES = 8;
 let icePromise = null;
 /* STUN + TURN dari server (TURN = relay agar video sampai di semua jaringan). Gagal → STUN saja. */
@@ -266,8 +268,9 @@ function waitIce(pc, ms, needRelay) {
 }
 /* Tekan latensi sisi penerima (Master): buffer jitter sekecil mungkin */
 function lowLatency(recv) {
-  try { if ('jitterBufferTarget' in recv) recv.jitterBufferTarget = 0; } catch (e) { }
-  try { if ('playoutDelayHint' in recv) recv.playoutDelayHint = 0; } catch (e) { }
+  // buffer 0 membuat setiap jitter jaringan langsung jadi patah-patah (FPS turun); buffer kecil ±150 ms menjaga 30 fps tetap rata
+  try { if ('jitterBufferTarget' in recv) recv.jitterBufferTarget = VID.jitterMs; } catch (e) { }
+  try { if ('playoutDelayHint' in recv) recv.playoutDelayHint = VID.jitterMs / 1000; } catch (e) { }
 }
 function closeLink(id) { const l = links[id]; if (!l) return; try { l.pc.close(); } catch (e) { } delete links[id]; }
 function closeAllLinks() { Object.keys(links).forEach(closeLink); clearInterval(fpsT); fpsT = 0; }
@@ -311,8 +314,14 @@ function startFps(players) {
         if (vid && vid.requestVideoFrameCallback) { const last = fpsLast[p.id]; if (last) fps = (fpsN[p.id] - last.n) * 1000 / (now - last.t); fpsLast[p.id] = { n: fpsN[p.id], t: now }; }
         else { try { (await l.pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video' && r.framesPerSecond != null) fps = r.framesPerSecond; }); } catch (e) { } }
       } else delete fpsLast[p.id];
+      let res = '', tip = '';
+      if (l && l.ok) { try { (await l.pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video') {
+        if (r.frameHeight) res = ' · ' + r.frameHeight + 'p';
+        const pl = r.packetsLost || 0, pr = r.packetsReceived || 0;
+        tip = 'Resolusi ' + (r.frameWidth || '?') + '×' + (r.frameHeight || '?') + ' · paket hilang ' + (pl + pr ? (pl * 100 / (pl + pr)).toFixed(1) : 0) + '% · frame dibuang ' + (r.framesDropped || 0) + ' · freeze ' + (r.freezeCount || 0) + ' · jitter ' + Math.round((r.jitter || 0) * 1000) + ' ms';
+      } }); } catch (e) { } }
       el.className = 'fps ' + (fps == null ? 'none' : fps >= 26 ? '' : fps >= 18 ? 'mid' : 'low');
-      el.textContent = fps == null ? '— FPS' : Math.round(fps) + ' FPS';
+      el.textContent = fps == null ? '— FPS' : Math.round(fps) + ' FPS' + res; el.title = tip;
     }
   }, 1000);
 }
@@ -446,21 +455,68 @@ let sendPC = null, sendN = 0, sendBusy = false, feed = null, fastT = 0;
 function makeFeed() {
   if (feed) return feed;
   const src = document.getElementById('c'), cv = document.createElement('canvas'); cv.width = VID.w; cv.height = VID.h;
-  const g = cv.getContext('2d', { alpha: false }), every = 1000 / VID.fps - 3; let last = 0, raf = 0, on = true;
-  const draw = t => {
-    if (!on) return; raf = requestAnimationFrame(draw);
-    if (t - last < every) return; last = t;
-    try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }
+  const g = cv.getContext('2d', { alpha: false }), period = 1000 / VID.fps; let on = true, timer = 0, next = performance.now();
+  // captureStream(0) + requestFrame(): frame hanya dikirim saat kita minta, tepat tiap 33,3 ms (tidak tergantung refresh layar 50/75/144 Hz)
+  const manual = typeof CanvasCaptureMediaStreamTrack !== 'undefined' && 'requestFrame' in CanvasCaptureMediaStreamTrack.prototype;
+  const stream = cv.captureStream(manual ? 0 : VID.fps), track = stream.getVideoTracks()[0];   // tanpa requestFrame: pakai captureStream(30) biasa
+  const grab = () => { if (manual) try { track.requestFrame(); } catch (e) { } };
+  const pump = () => {
+    if (!on) return;
+    const now = performance.now();
+    if (now >= next - 1) {
+      try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }   // bila game lambat, frame terakhir diulang → aliran tetap 30 fps
+      grab();
+      next += period; if (now - next > period * 3) next = now + period;   // tertinggal jauh: jangan menyusul beruntun
+    }
+    timer = setTimeout(pump, Math.max(1, next - performance.now()));
   };
-  g.drawImage(src, 0, 0, VID.w, VID.h); raf = requestAnimationFrame(draw);
-  const stream = cv.captureStream(VID.fps);
-  stream.getVideoTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (e) { } });
-  return feed = { stream, stop() { on = false; cancelAnimationFrame(raf); stream.getTracks().forEach(t => t.stop()); } };
+  try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }
+  pump();
+  stream.getVideoTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (e) { } });   // 'motion' = maintain-framerate: yang dikorbankan resolusi, bukan FPS
+  return feed = { stream, stop() { on = false; clearTimeout(timer); stream.getTracks().forEach(t => t.stop()); } };
+}
+function tuneSender(pc) {
+  pc.getSenders().forEach(sn => { try {
+    if (!sn.track) return;
+    const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}];
+    Object.assign(pr.encodings[0], { maxBitrate: VID.kbps * 1000, maxFramerate: VID.fps, scaleResolutionDownBy: SCALES[adaptLv], priority: 'high', networkPriority: 'high' });
+    pr.degradationPreference = 'maintain-framerate';   // Firefox/Safari; di Chrome efeknya lewat track.contentHint = 'motion'
+    sn.setParameters(pr).catch(() => { });
+  } catch (e) { } });
+}
+/* Pengatur resolusi otomatis (sisi pemain): FPS dikunci 30, yang dikorbankan hanya resolusi.
+   Tiap 1 dtk baca statistik pengirim: bila FPS encoder < 27 / paket hilang banyak / bandwidth tak cukup → resolusi turun 1 tingkat;
+   naik lagi pelan-pelan (setelah 8 dtk stabil) bila bandwidth cukup. */
+function startAdapt(pc) {
+  clearInterval(adaptT); let prev = null, good = 0, busy = false;
+  adaptT = setInterval(async () => {
+    if (busy || sendPC !== pc || pc.connectionState !== 'connected') return; busy = true;
+    try {
+      let out = null, avail = null, lost = 0;
+      (await pc.getStats()).forEach(r => {
+        if (r.type === 'outbound-rtp' && r.kind === 'video') out = r;
+        else if (r.type === 'candidate-pair' && r.nominated && r.availableOutgoingBitrate) avail = r.availableOutgoingBitrate;
+        else if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && r.fractionLost != null) lost = r.fractionLost;
+      });
+      if (!out) return;
+      const cur = { n: out.framesEncoded, t: performance.now() };
+      const fps = prev ? (cur.n - prev.n) * 1000 / (cur.t - prev.t) : null; prev = cur;
+      if (fps == null) return;
+      let want = 0;   // tingkat terkecil yang masih tertopang bandwidth (≥ ±0,09 bit/piksel/frame)
+      if (avail) { const bud = Math.min(avail, VID.kbps * 1000) * 0.85; while (want < SCALES.length - 1 && VID.w * VID.h / (SCALES[want] * SCALES[want]) * VID.fps * 0.09 > bud) want++; }
+      let lv = adaptLv;
+      if (fps < 27 || lost > 0.04) { lv = Math.min(lv + 1, SCALES.length - 1); good = 0; }
+      else if (want > lv) { lv = want; good = 0; }
+      else if (want < lv && ++good >= 8) { lv--; good = 0; }
+      else if (want >= lv) good = 0;
+      if (lv !== adaptLv) { adaptLv = lv; prev = null; pc.getSenders().forEach(sn => { try { if (!sn.track) return; const pr = sn.getParameters(); if (!pr.encodings || !pr.encodings.length) return; pr.encodings[0].scaleResolutionDownBy = SCALES[lv]; sn.setParameters(pr).catch(() => { }); } catch (e) { } }); }
+    } catch (e) { } finally { busy = false; }
+  }, 1000);
 }
 function stopBroadcast() {
   if (sendPC) { try { sendPC.close(); } catch (e) { } } sendPC = null;
   if (feed) { feed.stop(); feed = null; }
-  clearInterval(fastT); fastT = 0;
+  clearInterval(fastT); fastT = 0; clearInterval(adaptT); adaptT = 0;
 }
 async function answerOffer(offer) {
   if (sendBusy || typeof RTCPeerConnection === 'undefined') return;
@@ -472,13 +528,10 @@ async function answerOffer(offer) {
     const pc = sendPC = new RTCPeerConnection(ice);
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
-    pc.getSenders().forEach(sn => { try {
-      const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}];
-      Object.assign(pr.encodings[0], { maxBitrate: VID.kbps * 1000, maxFramerate: VID.fps, scaleResolutionDownBy: 1, priority: 'high', networkPriority: 'high' });
-      pr.degradationPreference = 'maintain-framerate';   // jaringan lemah: turunkan kualitas gambar, bukan fps/delay
-      sn.setParameters(pr).catch(() => { });
-    } catch (e) { } });
+    tuneSender(pc);
     await pc.setLocalDescription(await pc.createAnswer());
+    tuneSender(pc);   // diulang setelah negosiasi: sebelumnya setParameters bisa gagal diam-diam karena encodings belum ada
+    pc.addEventListener('connectionstatechange', () => { if (pc.connectionState === 'connected') { tuneSender(pc); startAdapt(pc); } });
     await waitIce(pc, 4000, ice.relay);
     if (sendPC !== pc) return;
     await call('signal', { kind: 'answer', n: offer.n, sdp: pc.localDescription.sdp });
