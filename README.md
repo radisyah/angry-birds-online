@@ -16,10 +16,10 @@ Room Master ────┼─ polling ─ /api/room ───┤
 - **Buat Ruangan** (pembuat = Pemain 1 & pemilik) atau **Jadi Room Master** (hanya memantau, tidak bermain). Teman bergabung dengan kode / tombol *Salin Tautan* (`?room=KODE`).
 - 2–4 pemain. Pemain menekan *Saya siap*; pemilik (Room Master bila ada, kalau tidak Pemain 1) menekan *Mulai*.
 - Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**
-  (video canvas game lengkap dengan soal & HUD, **360p = 640×360, 30 fps**, ±800 kbps per pemain; FPS aktual tampil di pojok kanan atas tiap video)
+  (video canvas game lengkap dengan soal & HUD, **dikunci 360p = 640×360, 24 fps**, ±900 kbps per pemain; FPS aktual tampil di pojok kanan atas tiap video)
   plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain. Master juga bisa *Hentikan permainan*.
-- **Cara siaran video:** WebRTC peer-to-peer (latensi ±0,1–0,3 dtk, buffer jitter penerima kecil ±150 ms agar 30 fps rata). Server (Vercel) hanya menukar pesan sinyal
-  (offer/answer), video **tidak** lewat server. Jaringan lemah → resolusi gambar yang turun bertahap (640×360 → 160×90, diatur otomatis oleh pemain tiap 1 dtk), bukan FPS (`contentHint = "motion"` + `maintain-framerate`; frame diambil tiap 33,3 ms dengan `requestFrame()`).
+- **Cara siaran video:** WebRTC peer-to-peer (latensi ±0,1–0,3 dtk, buffer jitter penerima kecil ±150 ms agar 24 fps rata). Server (Vercel) hanya menukar pesan sinyal
+  (offer/answer), video **tidak** lewat server. Resolusi dikunci 640×360 dan tidak turun otomatis; bila jaringan lemah, yang berkurang adalah kualitas/kelancaran (frame diambil tiap 41,7 ms dengan `requestFrame()`).
   **Trickle ICE:** offer/answer dikirim langsung tanpa menunggu pengumpulan kandidat selesai; kandidat ICE menyusul bertahap lewat `signal` (`kind: "cand"`, daftar kumulatif, per nomor tautan `n`).
   Master & pemain mengecek sinyal tiap ±0,6–0,7 dtk sampai video tersambung (biasanya ±1,7 dtk; sebelumnya ±4,9 dtk), lalu kembali normal.
   **Sambung ulang otomatis:** tautan `failed` langsung dibuat ulang; `disconnected` diberi tenggang 3 dtk (sering pulih sendiri); tautan yang belum tersambung dicoba ulang
@@ -54,7 +54,7 @@ Bila Redis belum terhubung, API membalas: *"Database belum dikonfigurasi…"*.
 ```bash
 node dev-server.js        # http://localhost:3000 (penyimpanan memori, hanya untuk pengembangan)
 npm test                  # 18 tes API: lewat memori DAN lewat jalur Redis REST (server tiruan format Upstash)
-python3 test/e2e.py       # (cek juga 640×360 & ≤30 fps) 3 browser Chromium: Room Master + 2 pemain (pip install playwright && playwright install chromium)
+python3 test/e2e.py       # (cek juga 640×360 & ≤24 fps) 3 browser Chromium: Room Master + 2 pemain (pip install playwright && playwright install chromium)
 ```
 Game memuat `matter-js` dari cdnjs (seperti file aslinya). `test/e2e.py` memakai pengganti tanpa fisika (`test/matter-stub.js`) bila matter-js tidak tersedia.
 

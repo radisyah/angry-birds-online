@@ -76,7 +76,7 @@ try:
         M.wait_for_timeout(2500)
         fps2 = M.evaluate("[...document.querySelectorAll('#mg .fps')].map(e=>parseInt(e.textContent))")
         print('    FPS (2):', fps2)
-        check('FPS siaran tidak melebihi 30 (batas 30 fps)', all(f <= 33 for f in fps2), fps2)
+        check('FPS siaran tidak melebihi 24 (batas 24 fps)', all(f <= 27 for f in fps2), fps2)
         M.screenshot(path=SHOTS + '/3-master-grid.png')
         A.screenshot(path=SHOTS + '/4-player-game.png')
 

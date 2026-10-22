@@ -235,8 +235,8 @@ function showWaiting() {
 
 /* ---------- Room Master: siaran gameplay langsung (WebRTC, video P2P dari canvas tiap pemain) ---------- */
 const STUN_ONLY = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }], relay: false };
-const VID = { w: 640, h: 360, fps: 30, kbps: 800, jitterMs: 150 };   // batas siaran: 360p, 30 fps; jitterMs = buffer kecil di Master agar 30 fps stabil
-const SCALES = [1, 1.5, 2, 3, 4];   // 640×360 → 427×240 → 320×180 → 213×120 → 160×90 (urutan resolusi yang dikorbankan, FPS tetap 30)
+const VID = { w: 640, h: 360, fps: 24, kbps: 900, jitterMs: 150 };   // siaran DIKUNCI 360p (640×360) 24 fps, resolusi tidak turun otomatis; jitterMs = buffer kecil di Master agar 24 fps stabil
+const SCALES = [1];   // resolusi dikunci 360p (tanpa penurunan otomatis)
 let adaptLv = 0, adaptT = 0;
 const LINK_RETRY_MS = 4500, LINK_MAX_TRIES = 8, LINK_GRACE_MS = 3000;   // tautan yang pernah tersambung & putus: sambung ulang tanpa batas percobaan
 let icePromise = null;
@@ -272,7 +272,7 @@ const candStr = c => JSON.stringify(c.toJSON ? c.toJSON() : c);
 const MAX_CAND = 40;
 /* Tekan latensi sisi penerima (Master): buffer jitter sekecil mungkin */
 function lowLatency(recv) {
-  // buffer 0 membuat setiap jitter jaringan langsung jadi patah-patah (FPS turun); buffer kecil ±150 ms menjaga 30 fps tetap rata
+  // buffer 0 membuat setiap jitter jaringan langsung jadi patah-patah (FPS turun); buffer kecil ±150 ms menjaga 24 fps tetap rata
   try { if ('jitterBufferTarget' in recv) recv.jitterBufferTarget = VID.jitterMs; } catch (e) { }
   try { if ('playoutDelayHint' in recv) recv.playoutDelayHint = VID.jitterMs / 1000; } catch (e) { }
 }
@@ -344,7 +344,7 @@ function startFps(players) {
         const pl = r.packetsLost || 0, pr = r.packetsReceived || 0;
         tip = 'Resolusi ' + (r.frameWidth || '?') + '×' + (r.frameHeight || '?') + ' · paket hilang ' + (pl + pr ? (pl * 100 / (pl + pr)).toFixed(1) : 0) + '% · frame dibuang ' + (r.framesDropped || 0) + ' · freeze ' + (r.freezeCount || 0) + ' · jitter ' + Math.round((r.jitter || 0) * 1000) + ' ms';
       } }); } catch (e) { } }
-      el.className = 'fps ' + (fps == null ? 'none' : fps >= 26 ? '' : fps >= 18 ? 'mid' : 'low');
+      el.className = 'fps ' + (fps == null ? 'none' : fps >= VID.fps - 3 ? '' : fps >= 15 ? 'mid' : 'low');
       el.textContent = fps == null ? '— FPS' : Math.round(fps) + ' FPS' + res; el.title = tip;
     }
   }, 1000);
@@ -476,9 +476,9 @@ async function sendOver() {
 }
 function stopStats() { clearInterval(statT); statT = 0; }
 
-/* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC, 360p · 30 fps) ---------- */
+/* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC, 360p · 24 fps, dikunci) ---------- */
 let sendPC = null, sendN = 0, sendBusy = false, feed = null, fastT = 0, fastBudget = 0, candN = 0, remoteRd = false, remotePend = [];
-/* Kanvas game 960×540 diperkecil ke 640×360 (360p) dan diambil 30 fps: ringan di HP pemain & tidak membebani Master. */
+/* Kanvas game 960×540 diperkecil ke 640×360 (360p) dan diambil 24 fps: ringan di HP pemain & tidak membebani Master. */
 function makeFeed() {
   if (feed) return feed;
   const src = document.getElementById('c'), cv = document.createElement('canvas'); cv.width = VID.w; cv.height = VID.h;
@@ -491,7 +491,7 @@ function makeFeed() {
     if (!on) return;
     const now = performance.now();
     if (now >= next - 1) {
-      try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }   // bila game lambat, frame terakhir diulang → aliran tetap 30 fps
+      try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }   // bila game lambat, frame terakhir diulang → aliran tetap 24 fps
       grab();
       next += period; if (now - next > period * 3) next = now + period;   // tertinggal jauh: jangan menyusul beruntun
     }
@@ -567,7 +567,7 @@ async function answerOffer(offer) {
     pc.onicecandidate = ev => { if (ev.candidate && lc.length < MAX_CAND) { lc.push(candStr(ev.candidate)); push(); } };
     pc.addEventListener('connectionstatechange', () => {
       if (sendPC !== pc) return;
-      if (pc.connectionState === 'connected') { tuneSender(pc); startAdapt(pc); }
+      if (pc.connectionState === 'connected') tuneSender(pc);
       else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) boostFast();   // cepat cek penawaran baru dari Master
     });
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
