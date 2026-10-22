@@ -556,7 +556,7 @@ function draw(al){
  g.save();g.lineCap='round';
  let bx=0,by=0;if(!paused&&shake>.3){bx=(Math.random()-.5)*shake;by=(Math.random()-.5)*shake}
  g.setTransform(1,0,0,1,bx,by);
- g.drawImage(HR?(BGH[+night]||(BGH[+night]=bakeBG(night,RK))):(BGS[+night]||(BGS[+night]=bakeBG(night))),0,0,W,H);
+ g.drawImage(HR?(BGH[+night]||(BGH[+night]=bakeBG(night,HR))):(BGS[+night]||(BGS[+night]=bakeBG(night))),0,0,W,H);
  // blok (sprite + interpolasi posisi/sudut)
  for(let i=0;i<items.length;i++){const b=items[i],an=ipa(b,al),cs=Math.cos(an),sn=Math.sin(an),s=blkSpr(b);
   g.setTransform(cs,sn,-sn,cs,ipx(b,al)+bx,ipy(b,al)+by);g.drawImage(s,-s.width/4,-s.height/4,s.width/2,s.height/2);

@@ -332,7 +332,7 @@ function showMasterGrid() {
     ol.className = 'full'; shownKey = 'grid' + v.gameNo; if (window.armFS) window.armFS();
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
-      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="1280" height="720"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="640" height="360"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
       <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
       <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };

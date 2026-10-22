@@ -11,7 +11,7 @@
 'use strict';
 const STEP = 1000 / 60, TAU = Math.PI * 2, OFF = 1024, SC = 16, HDR = 20, BODY = 9, PART = 15, MAXPKT = 1100;
 const STN = ['settle', 'ready', 'drag', 'fly'], STI = { settle: 0, ready: 1, drag: 2, fly: 3 };
-const RW = 1280, RH = 720, RS = RW / 960, rawST = typeof CanvasRenderingContext2D !== "undefined" ? CanvasRenderingContext2D.prototype.setTransform : null;   // resolusi kartu gameplay Master = 720p
+const RW = 640, RH = 360, RS = RW / 960, rawST = typeof CanvasRenderingContext2D !== "undefined" ? CanvasRenderingContext2D.prototype.setTransform : null;   // resolusi kartu gameplay Master DIKUNCI 360p (kartu kecil maupun diperbesar) agar GPU ringan saat 4 pemain; ubah RW/RH bila perlu
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const qPos = v => clamp(Math.round((v + OFF) * SC), 0, 65535), dPos = u => u / SC - OFF;
 const qAng = a => { a = a % TAU; if (a < 0) a += TAU; return Math.round(a / TAU * 65536) & 65535; }, dAng = u => u / 65536 * TAU;
@@ -163,7 +163,7 @@ const emitter = {
 class Replica {
   constructor(cv) {
     this.cv = cv; cv.width = RW; cv.height = RH; this.cx = cv.getContext('2d', { alpha: false });
-    // 720p: kanvas kartu 1280×720; draw() game bekerja di koordinat 960×540, jadi setTransform-nya dikalikan RW/960 (latar & HUD juga digambar beresolusi tinggi)
+    // 360p: kanvas kartu 640×360; draw() game bekerja di koordinat 960×540, jadi setTransform-nya dikalikan RW/960 (latar & HUD digambar langsung pada resolusi kartu)
     this.cx.imageSmoothingQuality = 'high';
     this.cx.setTransform = function (a, b, c, d, e, f) { return rawST.call(this, a * RS, b * RS, c * RS, d * RS, e * RS, f * RS); };
     this.hud = document.createElement('canvas'); this.hud.width = Math.round(960 * RS); this.hud.height = Math.round(100 * RS); this.hcx = this.hud.getContext('2d');
@@ -262,7 +262,7 @@ class Replica {
     const svG = g, svHR = HR, sv = [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart];
     master.cur = this;
     try {
-      g = this.cx; HR = 1; rawST.call(g, RS, 0, 0, RS, 0, 0);
+      g = this.cx; HR = RS; rawST.call(g, RS, 0, 0, RS, 0, 0);
       items = vItems; flock = vFlock; parts = this.parts; trail = this.trail; birds = m.bq; cur = m.cu ? { type: m.cu, r: m.cr || (B[m.cu] ? B[m.cu].r : 12) } : null;
       aim = { x: s.ax, y: s.ay }; st = STN[s.st]; shake = s.shake; flashA = s.flash; paused = false; night = !!m.ng; wrongQ = m.w; ans = m.a; frame = Tf; SQ = [1, 1];
       hearts = m.h; score = m.sc; qIdx = m.qi; qText = m.q; lvl = m.lv; streak = m.sk; cleared = m.cl; shots = m.sh; playMs = playMsNow; qStart = m.qs;

@@ -16,7 +16,7 @@ Room Master ────┼─ polling ─ /api/room ───┤
 - **Buat Ruangan** (pembuat = Pemain 1 & pemilik) atau **Jadi Room Master** (hanya memantau, tidak bermain). Teman bergabung dengan kode / tombol *Salin Tautan* (`?room=KODE`).
 - 2–4 pemain. Pemain menekan *Saya siap*; pemilik (Room Master bila ada, kalau tidak Pemain 1) menekan *Mulai*.
 - Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**, termasuk pesan 🐤 saat pemain kehilangan nyawa
-  (**gameplay digambar ulang di Master dari data posisi, bukan video**; tampil lengkap dengan soal & HUD pada resolusi **720p (1280×720)** di kartu maupun saat diperbesar (latar & HUD digambar ulang beresolusi 720p, bukan sekadar diperbesar), **60 FPS**; FPS & kbps aktual tampil di pojok kanan atas tiap kartu)
+  (**gameplay digambar ulang di Master dari data posisi, bukan video**; tampil lengkap dengan soal & HUD pada resolusi **terkunci 360p (640×360)** di kartu maupun saat diperbesar (ringan untuk GPU Master saat 4 pemain; ubah `RW`/`RH` di `live.js` bila ingin 540p/720p), **60 FPS**; FPS & kbps aktual tampil di pojok kanan atas tiap kartu)
   plus skor/nyawa/progres di tiap kartu; klik kartu untuk memperbesar satu pemain (kartu lain berhenti digambar → hemat CPU). Master juga bisa *Hentikan permainan*.
 - **Cara siaran (hemat bandwidth, ±10× lebih ringan dari video):** fisika tetap berjalan di perangkat tiap pemain. Pemain mengirim lewat WebRTC DataChannel peer-to-peer
   (a) snapshot biner posisi objek 60 Hz (9 byte/objek, hanya objek yang bergerak; keyframe penuh tiap 1 dtk) lewat kanal *tidak andal* (paket hilang tidak ditunggu → tidak patah-patah) dan
