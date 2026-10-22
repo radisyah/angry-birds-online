@@ -85,9 +85,9 @@ table.sb{width:100%;border-collapse:collapse}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 <script>
 const {Engine,Bodies,Composite,Body,Events,Vector}=Matter;
-const cv=document.getElementById('c'),g=cv.getContext('2d');
+const cv=document.getElementById('c');let g=cv.getContext('2d');
 const W=960,H=540,GY=470,SX=170,SY=372,MAXD=100,PW=0.16,GS=0.2778,DRAG=.9997,K=6,Q=5,TOTAL=15;
-const STEP=1000/60,mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c},BGS=[null,null],hudC=mk(W,100),hg=hudC.getContext('2d');let hudKey='',last=0,acc=0;
+const STEP=1000/60,mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c},BGS=[null,null],BGH=[null,null],RK=4/3,hudC=mk(W*RK,100*RK),hg=hudC.getContext('2d');hg.scale(RK,RK);let HR=0,hudKey='',last=0,acc=0;
 // 9 burung
 const B={
 chuck:{c:'#f4c20d',r:14,d:.003,n:'Chuck',s:'Tap saat terbang: speed boost 2x ke depan, lalu menembus kayu, es & besi selama lajunya cukup. Presisi untuk jawaban yang sudah terlihat.'},
@@ -490,7 +490,7 @@ function paintBG(c,n){
  c.fillStyle=n?'#1a2550':'#b8c7e8';[60,300,520,850].forEach((x,i)=>{c.beginPath();c.arc(x,GY-30,40+i%2*10,Math.PI,0);c.fillRect(x-4,GY-30,8,30);c.fill()});
  c.fillStyle='#5cb82e';c.fillRect(0,GY-4,W,14);c.fillStyle='#1d2f6e';c.fillRect(0,GY+10,W,H-GY);c.fillStyle='#2a408a';for(let i=0;i<40;i++){c.beginPath();c.arc((i*97)%W,GY+25+(i*53)%60,12,0,7);c.fill()}
  c.strokeStyle='#5a3a1c';c.lineWidth=10;c.lineCap='round';c.beginPath();c.moveTo(SX,GY);c.lineTo(SX,SY+25);c.moveTo(SX,SY+25);c.lineTo(SX-12,SY-12);c.moveTo(SX,SY+25);c.lineTo(SX+12,SY-14);c.stroke()}
-const bakeBG=n=>{const c=mk(W,H);paintBG(c.getContext('2d'),n);return c};
+const bakeBG=(n,k)=>{k=k||1;const c=mk(Math.round(W*k),Math.round(H*k)),x=c.getContext('2d');x.scale(k,k);paintBG(x,n);return c};
 // sprite tiap blok (di-cache; digambar ulang hanya kalau tampilannya berubah)
 // balok 3D: sisi tebal (ekstrusi), bevel, tekstur per bahan, kilau
 function slab(x,w,h,col,mat,b){
@@ -551,12 +551,12 @@ function drawHUD(){
   h.fillStyle='rgba(20,20,40,.72)';h.beginPath();if(h.roundRect)h.roundRect(px,8,pw,64,14);else h.rect(px,8,pw,64);h.fill();
   h.textAlign='center';h.fillStyle='#ffd54f';h.font='700 12px system-ui';h.fillText('SOAL '+Math.min(qIdx+1,TOTAL)+' / '+TOTAL+' — tembak jawaban · kayu/es 1x · besi 2x · balok panjang +1x',W/2,26);
   h.fillStyle='#fff';h.font='800 30px system-ui';h.fillText(qt,W/2,58);h.restore()}
- g.drawImage(hudC,0,0)}
+ g.drawImage(hudC,0,0,W,100)}
 function draw(al){
  g.save();g.lineCap='round';
  let bx=0,by=0;if(!paused&&shake>.3){bx=(Math.random()-.5)*shake;by=(Math.random()-.5)*shake}
  g.setTransform(1,0,0,1,bx,by);
- g.drawImage(BGS[+night]||(BGS[+night]=bakeBG(night)),0,0);
+ g.drawImage(HR?(BGH[+night]||(BGH[+night]=bakeBG(night,RK))):(BGS[+night]||(BGS[+night]=bakeBG(night))),0,0,W,H);
  // blok (sprite + interpolasi posisi/sudut)
  for(let i=0;i<items.length;i++){const b=items[i],an=ipa(b,al),cs=Math.cos(an),sn=Math.sin(an),s=blkSpr(b);
   g.setTransform(cs,sn,-sn,cs,ipx(b,al)+bx,ipy(b,al)+by);g.drawImage(s,-s.width/4,-s.height/4,s.width/2,s.height/2);

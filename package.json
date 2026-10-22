@@ -5,7 +5,7 @@
   "description": "BlockShot. Kompetisi 2–4 pemain online untuk Vercel (Upstash Redis).",
   "scripts": {
     "dev": "node dev-server.js",
-    "test": "node test/api.test.js && node test/redis-rest.test.js && node test/live.test.js && node test/skill-notify.test.js",
+    "test": "node test/api.test.js && node test/redis-rest.test.js && node test/live.test.js",
     "test:e2e": "python3 test/e2e.py",
     "test:smooth": "python3 test/live-smooth.py"
   },

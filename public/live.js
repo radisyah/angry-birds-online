@@ -9,8 +9,9 @@
    Master mem-buffer ±100 ms dan menginterpolasi antar snapshot, sehingga 60 fps tetap halus walau jaringan bergetar. */
 (function (root) {
 'use strict';
-const STEP = 1000 / 60, FPS_LOCK = 60, LOCK60 = true, CARD_W = 1280, CARD_H = 720, TAU = Math.PI * 2, OFF = 1024, SC = 16, HDR = 20, BODY = 9, PART = 15, MAXPKT = 1100;
+const STEP = 1000 / 60, TAU = Math.PI * 2, OFF = 1024, SC = 16, HDR = 20, BODY = 9, PART = 15, MAXPKT = 1100;
 const STN = ['settle', 'ready', 'drag', 'fly'], STI = { settle: 0, ready: 1, drag: 2, fly: 3 };
+const RW = 1280, RH = 720, RS = RW / 960, rawST = typeof CanvasRenderingContext2D !== "undefined" ? CanvasRenderingContext2D.prototype.setTransform : null;   // resolusi kartu gameplay Master = 720p
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const qPos = v => clamp(Math.round((v + OFF) * SC), 0, 65535), dPos = u => u / SC - OFF;
 const qAng = a => { a = a % TAU; if (a < 0) a += TAU; return Math.round(a / TAU * 65536) & 65535; }, dAng = u => u / 65536 * TAU;
@@ -69,7 +70,7 @@ function decodeSnap(buf) {
   return o;
 }
 
-const api = { FPS_LOCK, CARD_W, CARD_H, encodeSnap, decodeSnap, colorInt, hexColor, qPos, dPos, qAng, dAng, STEP };
+const api = { encodeSnap, decodeSnap, colorInt, hexColor, qPos, dPos, qAng, dAng, STEP };
 if (typeof window === 'undefined') { if (typeof module !== 'undefined') module.exports = api; return; }
 
 /* =====================================================================================================
@@ -80,14 +81,14 @@ const emitter = {
   active: false, hooked: false, chSt: null, chEv: null, known: new Map(), idc: 0, seq: 0, pend: [], txq: [], metaKey: '', scKey: '', forceKey: true, sentBytes: 0,
   install() {
     if (this.hooked) return; this.hooked = true;
-    const self = this, oStep = window.step, oP = window.P, oSkill = window.skill;
+    const self = this, oStep = window.step, oP = window.P;
     window.step = function () { oStep.apply(this, arguments); if (self.active) { try { self.onStep(); } catch (e) { console.error('live:', e); } } };
     window.P = function (o) { oP.apply(this, arguments); if (self.active) self.collect(o); };
-    // notifikasi skill burung → Room Master (kanal andal 'ev'); hanya bila skill benar-benar terpakai (bukan Terence yang tanpa skill)
-    if (typeof oSkill === 'function') window.skill = function (b) {
-      const ok = !!(b && B[b.type] && !b.used && !b.dead && b.type !== 'terence');
-      const r = oSkill.apply(this, arguments);
-      if (ok && b.used && self.active) { try { self.sendSkill(b); } catch (e) { console.error('live skill:', e); } }
+    // pesan "kehilangan nyawa" (toast 🐤 di layar pemain) ikut dikirim ke Master
+    const oLL = window.lifeLost;
+    if (typeof oLL === 'function') window.lifeLost = function () {
+      const r = oLL.apply(this, arguments);
+      if (self.active) { try { const t = document.getElementById('toast'), b = t && t.querySelector('b'), sm = t && t.querySelector('small'); if (b) self.toastQ = { m: b.textContent, s: sm ? sm.textContent : '' }; } catch (e) { } }
       return r;
     };
   },
@@ -106,10 +107,6 @@ const emitter = {
   meta() {
     return { sc: score, h: hearts, sk: streak, cl: cleared, sh: shots, qi: qIdx, q: qText, a: ans, w: wrongQ, lv: lvl, ng: night ? 1 : 0, qs: Math.round(qStart), dn: done ? 1 : 0,
       bq: (birds || []).slice(0, 5), cu: cur && cur.type || null, cr: cur && typeof cur.r === 'number' ? cur.r : 0 };
-  },
-  sendSkill(b) {
-    const ch = this.chEv; if (!ch || ch.readyState !== 'open') return;
-    ch.send(JSON.stringify({ t: 'sk', n: frame, ty: b.type, x: r2(b.position.x), y: r2(b.position.y), au: b.auto ? 1 : 0 }));
   },
   newId() { this.idc = (this.idc % 65534) + 1; return this.idc; },
   onStep() {
@@ -133,7 +130,8 @@ const emitter = {
     if (rm.length) e.rm = rm; if (nb.length) e.nb = nb; if (nf.length) e.nf = nf; if (bu.length) e.bu = bu;
     const m = this.meta(), mk = JSON.stringify(m); if (mk !== this.metaKey) { this.metaKey = mk; e.m = m; }
     if (this.txq.length) { e.tx = this.txq; this.txq = []; }
-    if (e.rm || e.nb || e.nf || e.bu || e.m || e.tx) { e.t = 'e'; e.n = n; try { chEv.send(JSON.stringify(e)); } catch (er) { } }
+    if (this.toastQ) { e.ts = this.toastQ; this.toastQ = null; }
+    if (e.rm || e.nb || e.nf || e.bu || e.m || e.tx || e.ts) { e.t = 'e'; e.n = n; try { chEv.send(JSON.stringify(e)); } catch (er) { } }
 
     // jaringan macet: jangan menumpuk antrean (latensi naik) — buang partikel & kirim ulang snapshot penuh begitu lancar
     if (chSt.bufferedAmount > 32768) { this.forceKey = true; this.pend.length = 0; return; }
@@ -164,15 +162,18 @@ const emitter = {
    ===================================================================================================== */
 class Replica {
   constructor(cv) {
-    this.cv = cv; this.cx = cv.getContext('2d', { alpha: false }); this.onSkill = null;
-    this.hud = document.createElement('canvas'); this.hud.width = 960; this.hud.height = 100; this.hcx = this.hud.getContext('2d');
+    this.cv = cv; cv.width = RW; cv.height = RH; this.cx = cv.getContext('2d', { alpha: false });
+    // 720p: kanvas kartu 1280×720; draw() game bekerja di koordinat 960×540, jadi setTransform-nya dikalikan RW/960 (latar & HUD juga digambar beresolusi tinggi)
+    this.cx.imageSmoothingQuality = 'high';
+    this.cx.setTransform = function (a, b, c, d, e, f) { return rawST.call(this, a * RS, b * RS, c * RS, d * RS, e * RS, f * RS); };
+    this.hud = document.createElement('canvas'); this.hud.width = Math.round(960 * RS); this.hud.height = Math.round(100 * RS); this.hcx = this.hud.getContext('2d');
     this.hidden = false; this.big = false; this.D = 6; this.off = null; this.has = false; this.lastSeq = -1;
     this.stat = { bytes: 0, pk: 0, frames: 0, ms: 0, lost: 0, exp: 0, starve: 0, calm: 0, out: { fps: 0, kbps: 0, hz: 0, loss: 0, delay: 100, ms: 0 } };
     this.m = { sc: 0, h: 3, sk: 0, cl: 0, sh: 0, qi: 0, q: '', a: 0, w: 0, lv: 0, ng: 0, qs: 0, dn: 0, bq: [], cu: null, cr: 0 };
     this.s = { st: 0, ax: 170, ay: 372, shake: 0, flash: 0 }; this.last = { n: 0, playMs: 0 }; this.lastPopN = -1; this.newN = 0; this.fdone = 0; this.hudKey = '';
     this.clearWorld();
   }
-  clearWorld() { this.map = new Map(); this.bodies = []; this.parts = []; this.trail = []; this.buf = []; this.evq = []; this.fdone = 0; }
+  clearWorld() { this.toast = null; this.map = new Map(); this.bodies = []; this.parts = []; this.trail = []; this.buf = []; this.evq = []; this.fdone = 0; }
   addBody(d, n, kind) {
     const old = this.map.get(d.i); if (old) this.bodies.splice(this.bodies.indexOf(old), 1);
     const b = { id: d.i, k: kind, birth: n, die: Infinity, seen: false, hist: [[n, d.x, d.y, d.a]], position: { x: d.x, y: d.y }, angle: d.a };
@@ -184,12 +185,11 @@ class Replica {
     let e; try { e = JSON.parse(str); } catch (er) { return; }
     this.stat.bytes += str.length;
     if (e.t === 'reset') { this.clearWorld(); return; }
-    if (e.t === 'sk') { this.evq.push({ n: e.n, sk: e }); return; }   // diterapkan saat waktu simulasi Master mencapai langkah itu (sinkron dengan gambar)
     if (e.t !== 'e') return;
     if (e.rm) for (const id of e.rm) { const b = this.map.get(id); if (b) b.die = e.n; }
     if (e.nb) for (const d of e.nb) this.addBody(d, e.n, 0);
     if (e.nf) for (const d of e.nf) this.addBody(d, e.n, 1);
-    if (e.bu || e.m || e.tx) this.evq.push(e);
+    if (e.bu || e.m || e.tx || e.ts) this.evq.push(e);
   }
   onPacket(buf) {
     const p = decodeSnap(buf); if (!p) return;
@@ -215,9 +215,9 @@ class Replica {
   simT(now) { return (now - this.off) / STEP - this.D; }
   spawn(o) { this.nspawn = (this.nspawn || 0) + 1; if (o.k === 'txt') this.ntxt = (this.ntxt || 0) + 1; o.L = o.l; if (o.g === undefined) o.g = .3; this.parts.push(o); if (this.parts.length > 600) this.parts.splice(0, this.parts.length - 600); }
   applyEv(e) {
-    if (e.sk && this.onSkill) { try { this.onSkill(e.sk); } catch (er) { } }
     if (e.bu) for (const u of e.bu) { const b = this.map.get(u.i); if (b) { if (u.t !== undefined) b.t = u.t; b.mat = u.m; b.dent = u.d; b.frozen = !!u.f; } }
     if (e.m) Object.assign(this.m, e.m);
+    if (e.ts) this.toast = { m: String(e.ts.m || '').slice(0, 120), s: String(e.ts.s || '').slice(0, 60), f: e.n };
     if (e.tx) for (const t of e.tx) this.spawn({ k: 'txt', x: t.x, y: t.y, vx: t.vx, vy: t.vy, g: t.g, l: t.l, c: t.c, tx: t.tx });
   }
   applyPkt(p) {
@@ -257,23 +257,41 @@ class Replica {
       this.sample(b, T); (b.k === 0 ? vItems : vFlock).push(b);
     }
     const m = this.m, s = this.s;
-    const W0 = CARD_W, H0 = CARD_H;   // resolusi kartu dikunci 1280×720 (720p), baik kartu biasa maupun diperbesar
-    if (this.cv.width !== W0) { this.cv.width = W0; this.cv.height = H0; }
     const playMsNow = m.dn ? this.last.playMs : this.last.playMs + Math.min(1000, Math.max(0, (T - this.last.n) * STEP));
     const t0 = performance.now();
-    const sv = [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart];
+    const svG = g, svHR = HR, sv = [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart];
     master.cur = this;
     try {
+      g = this.cx; HR = 1; rawST.call(g, RS, 0, 0, RS, 0, 0);
       items = vItems; flock = vFlock; parts = this.parts; trail = this.trail; birds = m.bq; cur = m.cu ? { type: m.cu, r: m.cr || (B[m.cu] ? B[m.cu].r : 12) } : null;
       aim = { x: s.ax, y: s.ay }; st = STN[s.st]; shake = s.shake; flashA = s.flash; paused = false; night = !!m.ng; wrongQ = m.w; ans = m.a; frame = Tf; SQ = [1, 1];
       hearts = m.h; score = m.sc; qIdx = m.qi; qText = m.q; lvl = m.lv; streak = m.sk; cleared = m.cl; shots = m.sh; playMs = playMsNow; qStart = m.qs;
       draw(1);
-      this.cx.drawImage(cv, 0, 0, W0, H0);
+      if (this.toast) this.drawToast(Tf);
     } finally {
+      rawST.call(this.cx, 1, 0, 0, 1, 0, 0); g = svG; HR = svHR;
       [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart] = sv;
       master.cur = null;
     }
     S.frames++; S.ms += performance.now() - t0;
+  }
+  drawToast(Tf) {   // salinan toast CSS #toast (animasi 3,6 dtk = 216 langkah) digambar di kartu Master
+    const T = this.toast, p = (Tf - T.f) / 216;
+    if (p < 0) return; if (p >= 1) { this.toast = null; return; }
+    const a = p < .08 ? p / .08 : p > .88 ? (1 - p) / .12 : 1, sc = p < .08 ? .8 + .27 * p / .08 : p < .14 ? 1.07 - .07 * (p - .08) / .06 : 1, dy = p < .08 ? -14 * (1 - p / .08) : 0;
+    const x = this.cx; x.save(); rawST.call(x, RS, 0, 0, RS, 0, 0); x.globalAlpha = Math.max(0, Math.min(1, a));
+    x.font = '700 22px system-ui'; const mw = Math.min(x.measureText(T.m).width, 560);
+    x.font = '15px system-ui'; const sw = x.measureText(T.s).width;
+    const tw = Math.max(mw, sw), w = tw + 56 + 44, h = 76, cx0 = 480, cy0 = 540 * .24 + h / 2 + dy;
+    x.translate(cx0, cy0); x.scale(sc, sc);
+    const rr = (X, Y, W, H, R) => { x.beginPath(); if (x.roundRect) x.roundRect(X, Y, W, H, R); else x.rect(X, Y, W, H); };
+    x.fillStyle = 'rgba(0,0,0,.27)'; rr(-w / 2, -h / 2 + 5, w, h, 24); x.fill();
+    x.fillStyle = '#fff'; rr(-w / 2, -h / 2, w, h, 24); x.fill(); x.lineWidth = 4; x.strokeStyle = '#ff6b9d'; x.stroke();
+    x.textBaseline = 'middle'; x.textAlign = 'left';
+    x.font = '38px system-ui'; x.fillText('🐤', -w / 2 + 20, 2);
+    x.fillStyle = '#2a2118'; x.font = '700 22px system-ui'; x.fillText(T.m, -w / 2 + 20 + 56, -12, 560);
+    x.globalAlpha *= .8; x.font = '15px system-ui'; x.fillText(T.s, -w / 2 + 20 + 56, 16);
+    x.restore(); rawST.call(x, RS, 0, 0, RS, 0, 0);
   }
   tick() {   // dipanggil tiap 1 dtk: ringkasan statistik untuk label di kartu
     const S = this.stat, o = S.out;
@@ -288,7 +306,7 @@ class Replica {
 
 /* Penggerak render Master: satu loop rAF untuk semua replika; loop bawaan game dimatikan & drawHUD diganti (cache HUD per pemain) */
 const master = {
-  reps: null, on: false, raf: 0, cur: null, lite: false, load: 0, fno: 0, nextR: 0, oTick: null, oHUD: null, dead: false, swapped: false,
+  reps: null, on: false, raf: 0, cur: null, lite: false, load: 0, fno: 0, oTick: null, oHUD: null, dead: false, swapped: false,
   start(reps) {
     this.stop(); this.reps = reps; this.on = true;
     if (!this.swapped) {
@@ -299,24 +317,19 @@ const master = {
       window.drawHUD = function () {
         const R = master.cur; if (!R) return oHUD();
         const k = (playMs / 1000 | 0) + '|' + score + '|' + hearts + '|' + lvl + '|' + streak + '|' + cleared + '|' + shots + '|' + qText + '|' + qIdx + '|' + night + '|' + (st === 'fly');
-        if (R.hudKey !== k) { R.hudKey = k; hudKey = ''; oHUD(); R.hcx.clearRect(0, 0, 960, 100); R.hcx.drawImage(hudC, 0, 0); }
-        else g.drawImage(R.hud, 0, 0);
+        if (R.hudKey !== k) { R.hudKey = k; hudKey = ''; oHUD(); R.hcx.clearRect(0, 0, R.hud.width, R.hud.height); R.hcx.drawImage(hudC, 0, 0, R.hud.width, R.hud.height); }
+        else g.drawImage(R.hud, 0, 0, 960, 100);
       };
     }
-    this.nextR = 0;
     const loop = now => {
       if (!this.on) return; this.raf = requestAnimationFrame(loop);
-      // kunci 60 FPS: layar 90/120/144 Hz tidak menggambar lebih dari 60×/dtk; layar 60 Hz tetap tiap frame (toleransi 1,5 ms untuk jitter rAF)
-      if (!this.nextR || now - this.nextR > STEP * 3) this.nextR = now;
-      if (now + 1.5 < this.nextR) return;
-      this.nextR += STEP;
       const t0 = performance.now(); let k = 0; this.fno++;
       for (const id in this.reps) {
         // mode hemat: perangkat Master tidak sanggup menggambar semua kartu tiap frame → kartu bergantian (tiap kartu 30 FPS); logika & interpolasi tetap jalan
         try { this.reps[id].render(now, this.lite && ((this.fno + k++) & 1)); } catch (e) { console.error('live render:', e); }
       }
       this.load = this.load * .9 + (performance.now() - t0) * .1;
-      if (!LOCK60 && this.fno % 30 === 0) { if (!this.lite && this.load > 13) this.lite = true; else if (this.lite && this.load < 4.5) this.lite = false; }   // mode hemat (30 FPS) mati selama LOCK60 = true
+      if (this.fno % 30 === 0) { if (!this.lite && this.load > 13) this.lite = true; else if (this.lite && this.load < 4.5) this.lite = false; }
     };
     this.raf = requestAnimationFrame(loop);
   },

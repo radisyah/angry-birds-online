@@ -47,10 +47,6 @@ style.textContent = `
 .tl .vs.ok{display:none}
 .tl .fps{position:absolute;right:8px;top:6px;background:#000a;border-radius:8px;padding:2px 9px;font:800 14px ui-monospace,Menlo,monospace;color:#8f8;pointer-events:none}
 .tl .fps.mid{color:#ffd54f}.tl .fps.low{color:#ff8a80}.tl .fps.none{color:#aaa}
-.tl .sk{position:absolute;left:50%;bottom:10px;transform:translate(-50%,8px);max-width:94%;display:flex;align-items:center;gap:8px;background:#000c;border:2px solid var(--c,#ffd54f);border-radius:12px;padding:6px 12px;font-size:15px;font-weight:800;color:#fff;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
-.tl .sk.on{opacity:1;transform:translate(-50%,0)}
-.tl .sk i{flex:none;width:14px;height:14px;border-radius:50%;background:var(--c,#ffd54f);box-shadow:0 0 8px var(--c,#ffd54f)}
-.tl .sk span{font-weight:600;font-size:13px;color:#dfe6ff}
 .tl .sc{position:absolute;left:8px;top:6px;background:#000a;border-radius:8px;padding:2px 10px;font-size:22px;font-weight:900;color:#ffd54f;pointer-events:none}
 .tl .pb{height:6px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
 .tl .tb{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:#cfe;flex-wrap:wrap}
@@ -306,20 +302,10 @@ function startStats(players) {
       const el = $$('fp' + p.id), r = reps[p.id]; if (!el || !r) continue;
       const o = r.tick(), shown = !r.hidden;
       el.className = 'fps ' + (!r.has ? 'none' : !shown ? 'none' : o.fps >= 50 ? '' : o.fps >= 25 ? 'mid' : 'low');
-      el.textContent = !r.has ? '— FPS' : (shown ? o.fps : '⏸') + ' FPS · 720p · ' + o.kbps + ' kbps' + (Live.master.lite && shown ? ' · hemat' : '');
-      el.title = 'Gambar ' + o.fps + ' FPS (dikunci maks. 60 FPS) · resolusi kartu dikunci 1280×720 (720p) · (digambar ulang di perangkat ini, bukan video) · data ' + o.hz + ' paket/dtk · ' + o.kbps + ' kbps · paket hilang ' + o.loss + '% · buffer ' + o.delay + ' ms · waktu gambar ' + o.ms + ' ms/frame' + (Live.master.lite ? ' · MODE HEMAT: perangkat Master tidak cukup cepat menggambar semua kartu 60 FPS (tutup tab lain, perbesar satu kartu, atau pakai laptop yang lebih kuat)' : '');
+      el.textContent = !r.has ? '— FPS' : (shown ? o.fps : '⏸') + ' FPS · ' + o.kbps + ' kbps' + (Live.master.lite && shown ? ' · hemat' : '');
+      el.title = 'Gambar ' + o.fps + ' FPS (digambar ulang di perangkat ini, bukan video) · data ' + o.hz + ' paket/dtk · ' + o.kbps + ' kbps · paket hilang ' + o.loss + '% · buffer ' + o.delay + ' ms · waktu gambar ' + o.ms + ' ms/frame' + (Live.master.lite ? ' · MODE HEMAT: perangkat Master tidak cukup cepat menggambar semua kartu 60 FPS (tutup tab lain, perbesar satu kartu, atau pakai laptop yang lebih kuat)' : '');
     }
   }, 1000);
-}
-/* Notifikasi skill burung di kartu pemain (Room Master): muncul saat pemain menekan skill, hilang sendiri setelah ±2,6 dtk */
-const skT = {};
-function skillNote(id, e) {
-  const el = $$('sk' + id), d = typeof B !== 'undefined' && B[e.ty]; if (!el || !d) return;
-  const desc = (typeof SH !== 'undefined' && SH[e.ty] || '').replace(/^Tap:\s*/i, '');
-  el.style.setProperty('--c', d.c);
-  el.innerHTML = '<i></i><b>' + esc(d.n) + ' — skill aktif' + (e.au ? ' (otomatis)' : '') + '</b><span>' + esc(desc) + '</span>';
-  el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
-  clearTimeout(skT[id]); skT[id] = setTimeout(() => el.classList.remove('on'), 2600);
 }
 function updateLinkUI(id) {
   const vs = document.querySelector('#vs' + id), l = links[id], r = reps[id]; if (!vs) return;
@@ -346,11 +332,11 @@ function showMasterGrid() {
     ol.className = 'full'; shownKey = 'grid' + v.gameNo; if (window.armFS) window.armFS();
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
-      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="1280" height="720"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div><div class="sk" id="sk${p.id}"></div></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="1280" height="720"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
       <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
       <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };
-    v.players.forEach(p => { const r = reps[p.id] = new Live.Replica($$('vd' + p.id)); r.onSkill = e => skillNote(p.id, e); });
+    v.players.forEach(p => { reps[p.id] = new Live.Replica($$('vd' + p.id)); });
     Live.master.start(reps); startStats(v.players);
     v.players.forEach(p => { $$('vw' + p.id).onclick = () => { const mg = $$('mg'), t = $$('tl' + p.id), on = !t.classList.contains('zm'); mg.querySelectorAll('.tl').forEach(x => x.classList.remove('zm')); mg.classList.toggle('focus', on); if (on) t.classList.add('zm'); v.players.forEach(q => { const r = reps[q.id]; if (r) { r.hidden = on && q.id !== p.id; r.big = on && q.id === p.id; } }); }; });
   }
