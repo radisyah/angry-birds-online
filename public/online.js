@@ -1,4 +1,4 @@
-/* Klien online Angry Birds Math — dimuat setelah game utama di index.html.
+/* Klien online BlockShot — dimuat setelah game utama di index.html.
    Pola sama dengan war-of-kingdom: kode ruangan 5 karakter, token sesi di localStorage, polling /api/room (Vercel + Upstash Redis).
    Fisika berjalan lokal di tiap perangkat; soal, susunan blok & urutan burung sama untuk semua pemain (seed dari server). */
 (() => {
@@ -42,7 +42,7 @@ style.textContent = `
 .tl.fin{border-color:#ffd54f}.tl.off{border-color:#888}
 .tl .th{display:flex;justify-content:space-between;gap:8px;font-weight:800;font-size:16px}
 .tl .vw{position:relative;flex:1;min-height:0;background:#000;border-radius:8px;overflow:hidden;cursor:zoom-in;display:flex;align-items:center;justify-content:center}
-.tl .vw video{width:100%;height:100%;object-fit:contain;background:#000}
+.tl .vw canvas{width:100%;height:100%;object-fit:contain;background:#000;border-radius:0}
 .tl .vs{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;font-size:14px;color:#cfd8ff;background:#000a;pointer-events:none}
 .tl .vs.ok{display:none}
 .tl .fps{position:absolute;right:8px;top:6px;background:#000a;border-radius:8px;padding:2px 9px;font:800 14px ui-monospace,Menlo,monospace;color:#8f8;pointer-events:none}
@@ -107,7 +107,7 @@ function pollDelay() {
   if (document.hidden) return 4000;
   if (!V) return 1000;
   if (V.status === 'playing') {
-    if (V.side === 'master') return Object.keys(links).length < V.players.filter(p => !p.done && !p.left).length || Object.keys(links).some(k => !links[k].ok) ? 600 : 1500;   // cepat selama video belum tersambung
+    if (V.side === 'master') return Object.keys(links).length < V.players.filter(p => !p.done && !p.left).length || Object.keys(links).some(k => !links[k].ok) ? 600 : 1500;   // cepat selama gameplay belum tersambung belum tersambung
     return 2000;
   }
   return 1000;
@@ -126,7 +126,7 @@ async function pollOnce() {
   if (!ON) return;
   try {
     const qs = { code: ON.code, token: ON.token, v: V ? V.v : 0 };
-    if (V && V.side === 'master' && V.status === 'playing') { qs.g = V.gameNo; qs.an = Object.keys(links).map(id => id + ':' + links[id].an).join(','); qs.lc = Object.keys(links).map(id => id + ':' + links[id].n + ':' + links[id].cn).join(','); }
+    if (V && V.side === 'master' && V.status === 'playing') { qs.g = V.gameNo; qs.an = Object.keys(links).map(id => id + ':' + links[id].an).join(','); }
     const r = await fetch(API + '?' + new URLSearchParams(qs), { cache: 'no-store' });
     const j = await r.json();
     if (!j.ok) { if (r.status === 404 || r.status === 401) return sessionLost(j.error); throw new Error(j.error); }
@@ -146,7 +146,7 @@ function applyView(v) {
   if (playing && v.status === 'lobby') { location.reload(); return; }
   if (v.side === 'player' && v.status === 'playing' && !playing && v.seed != null) startPlayer(v.seed);
   if (v.status === 'finished') { stopStats(); stopBroadcast(); if (playing) freezeGame(); closeAllLinks(); }
-  if (v.side === 'master' && v.status === 'playing' && v.sigs) Object.keys(v.sigs).forEach(id => gotSignal(id, v.sigs[id]));
+  if (v.side === 'master' && v.status === 'playing' && v.sigs) Object.keys(v.sigs).forEach(id => gotAnswer(id, v.sigs[id]));
   render();
 }
 
@@ -167,7 +167,7 @@ function render() {
 function showMenu() {
   ol.className = ''; shownKey = 'menu';
   if (!menuForm.name) menuForm.name = getName();
-  ol.innerHTML = `<div class="card"><div class="lg">🐦 Angry Birds<small>Math Edition · Online</small></div>
+  ol.innerHTML = `<div class="card"><div class="lg">🐦 BlockShot<small>Online</small></div>
   <input id="nm" maxlength="12" placeholder="Nama kamu" value="${esc(menuForm.name)}">
   <div class="rw"><button class="b" id="cp">🎮 Buat Ruangan</button><button class="b gold" id="cm">👑 Jadi Room Master</button></div>
   <hr class="hr">
@@ -233,14 +233,12 @@ function showWaiting() {
   $$('lv').onclick = leave;
 }
 
-/* ---------- Room Master: siaran gameplay langsung (WebRTC, video P2P dari canvas tiap pemain) ---------- */
+/* ---------- Room Master: siaran gameplay langsung (WebRTC DataChannel P2P: posisi objek, digambar ulang di Master — lihat live.js) ---------- */
 const STUN_ONLY = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }], relay: false };
-const VID = { w: 640, h: 360, fps: 24, kbps: 900, jitterMs: 150 };   // siaran DIKUNCI 360p (640×360) 24 fps, resolusi tidak turun otomatis; jitterMs = buffer kecil di Master agar 24 fps stabil
-const SCALES = [1];   // resolusi dikunci 360p (tanpa penurunan otomatis)
-let adaptLv = 0, adaptT = 0;
-const LINK_RETRY_MS = 4500, LINK_MAX_TRIES = 8, LINK_GRACE_MS = 3000;   // tautan yang pernah tersambung & putus: sambung ulang tanpa batas percobaan
+const reps = {};   // id pemain -> Live.Replica (replika permainan yang digambar di kartu Master)
+const LINK_RETRY_MS = 9000, LINK_MAX_TRIES = 8;
 let icePromise = null;
-/* STUN + TURN dari server (TURN = relay agar video sampai di semua jaringan). Gagal → STUN saja. */
+/* STUN + TURN dari server (TURN = relay agar data gameplay sampai di semua jaringan). Gagal → STUN saja. */
 function getIce() {
   if (!icePromise) icePromise = (async () => {
     try {
@@ -255,105 +253,65 @@ function getIce() {
 }
 let iceRelay = true;
 let links = {};          // id -> { pc, n, an (jawaban terakhir yang diproses), t (mulai), ok, stream }
-/* Trickle ICE: kandidat dikirim begitu ditemukan (tanpa menunggu semua terkumpul), sebagai daftar kumulatif yang diganti utuh.
-   Satu pengiriman berjalan sekaligus agar urutan tidak terbalik; kandidat baru yang muncul saat mengirim ikut dikirim di putaran berikut. */
-function makeTrickle(list, send) {
-  let t = 0, busy = false, again = false;
-  const run = async () => {
-    if (busy) { again = true; return; }
-    busy = true;
-    try { do { again = false; await send(list.slice()); } while (again); }
-    catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
-    busy = false;
-  };
-  return () => { clearTimeout(t); t = setTimeout(run, 100); };
-}
-const candStr = c => JSON.stringify(c.toJSON ? c.toJSON() : c);
-const MAX_CAND = 40;
-/* Tekan latensi sisi penerima (Master): buffer jitter sekecil mungkin */
-function lowLatency(recv) {
-  // buffer 0 membuat setiap jitter jaringan langsung jadi patah-patah (FPS turun); buffer kecil ±150 ms menjaga 24 fps tetap rata
-  try { if ('jitterBufferTarget' in recv) recv.jitterBufferTarget = VID.jitterMs; } catch (e) { }
-  try { if ('playoutDelayHint' in recv) recv.playoutDelayHint = VID.jitterMs / 1000; } catch (e) { }
+function waitIce(pc, ms, needRelay) {
+  return new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    let rt = 0;
+    const done = () => { clearTimeout(t); clearTimeout(rt); pc.removeEventListener('icegatheringstatechange', ch); pc.removeEventListener('icecandidate', cd); res(); };
+    const ch = () => { if (pc.iceGatheringState === 'complete') done(); };
+    // ada kandidat relay (TURN) → cukup tunggu sebentar agar kandidat lain ikut, tidak perlu menunggu semua server
+    const cd = ev => { if (needRelay && ev.candidate && ev.candidate.type === 'relay' && !rt) rt = setTimeout(done, 350); };
+    const t = setTimeout(done, ms); pc.addEventListener('icegatheringstatechange', ch); pc.addEventListener('icecandidate', cd);
+  });
 }
 function closeLink(id) { const l = links[id]; if (!l) return; try { l.pc.close(); } catch (e) { } delete links[id]; }
-function closeAllLinks() { Object.keys(links).forEach(closeLink); clearInterval(fpsT); fpsT = 0; }
+function closeAllLinks() { Object.keys(links).forEach(closeLink); clearInterval(statsT); statsT = 0; Live.master.stop(); Object.keys(reps).forEach(k => delete reps[k]); }
+/* Master membuka 2 DataChannel ke pemain: 'st' (snapshot posisi 60 Hz, tidak andal) dan 'ev' (kejadian & skor, andal). Tanpa video sama sekali. */
 async function openLink(id) {
   if (typeof RTCPeerConnection === 'undefined') return;
   const prev = links[id], n = prev ? prev.n + 1 : 1, gNo = V.gameNo;
   if (prev) { try { prev.pc.close(); } catch (e) { } }
   const ice = await getIce(); iceRelay = ice.relay;
   if (!V || V.gameNo !== gNo) return;
-  const pc = new RTCPeerConnection(ice), lc = [];
-  const l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true, everOk: !!(prev && prev.everOk), dropAt: 0,
-    tries: prev && !prev.everOk ? prev.tries + 1 : 1, cn: 0, lc, pend: [], rd: false };
-  const push = makeTrickle(lc, list => links[id] === l ? call('signal', { kind: 'cand', to: id, n, c: list }) : Promise.resolve());
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.onicecandidate = ev => { if (ev.candidate && lc.length < MAX_CAND) { lc.push(candStr(ev.candidate)); push(); } };
-  pc.ontrack = ev => { lowLatency(ev.receiver); const vid = document.querySelector('#vd' + id); if (vid) { vid.srcObject = ev.streams[0] || new MediaStream([ev.track]); vid.play().catch(() => { }); } };
-  pc.onconnectionstatechange = () => {
-    if (links[id] !== l) return;   // tautan lama yang sudah diganti
-    const st = pc.connectionState;
-    l.ok = st === 'connected';
-    if (l.ok) { l.everOk = true; l.dropAt = 0; }
-    else if (st === 'disconnected' && !l.dropAt) l.dropAt = Date.now();
-    updateLinkUI(id);
-    if ((st === 'failed' || st === 'closed') && V && V.status === 'playing') maintainLinks(V);   // gagal: sambung ulang segera, tanpa menunggu polling
-  };
+  const pc = new RTCPeerConnection(ice), l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true };
+  const st = pc.createDataChannel('st', { ordered: false, maxRetransmits: 0 }), ev = pc.createDataChannel('ev', { ordered: true });
+  st.binaryType = 'arraybuffer';
+  st.onmessage = e => { const r = reps[id]; if (r) r.onPacket(e.data); };
+  ev.onmessage = e => { const r = reps[id]; if (r) r.onEv(e.data); };
+  const chk = () => { l.ok = pc.connectionState === 'connected' && st.readyState === 'open' && ev.readyState === 'open'; updateLinkUI(id); };
+  st.onopen = ev.onopen = st.onclose = ev.onclose = chk; pc.onconnectionstatechange = chk;
   try {
-    await pc.setLocalDescription(await pc.createOffer());   // offer langsung dikirim; kandidat menyusul (trickle)
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc, 4000, ice.relay);
     if (links[id] !== l || !V || V.gameNo !== gNo) return;
     await call('signal', { kind: 'offer', to: id, n, sdp: pc.localDescription.sdp });
-    push();
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
   l.busy = false;
 }
-function flushPend(l) {
-  if (!l.rd) return;
-  while (l.pend.length) { let c; try { c = JSON.parse(l.pend.shift()); } catch (e) { continue; } l.pc.addIceCandidate(c).catch(() => { }); }
+async function gotAnswer(id, a) {
+  const l = links[id]; if (!l || !a || a.n !== l.n || l.an === a.n) return;
+  l.an = a.n;
+  try { await l.pc.setRemoteDescription({ type: 'answer', sdp: a.sdp }); } catch (e) { l.an = 0; }
 }
-/* Jawaban (answer) dan kandidat ICE pemain: e = { a?: {n, sdp}, c?: {n, from, c: [...]} } */
-function gotSignal(id, e) {
-  const l = links[id]; if (!l || !e) return;
-  if (e.a && e.a.n === l.n && l.an !== e.a.n) {
-    l.an = e.a.n;
-    l.pc.setRemoteDescription({ type: 'answer', sdp: e.a.sdp }).then(() => { l.rd = true; flushPend(l); }).catch(() => { l.an = 0; });
-  }
-  if (e.c && e.c.n === l.n && e.c.from === l.cn) { l.cn += e.c.c.length; l.pend.push(...e.c.c); flushPend(l); }
-}
-/* FPS video yang benar-benar tampil di layar Master (dihitung per frame lewat requestVideoFrameCallback; cadangan: getStats) */
-let fpsT = 0, fpsN = {}, fpsLast = {};
-function startFps(players) {
-  clearInterval(fpsT); fpsN = {}; fpsLast = {};
-  players.forEach(p => {
-    const vid = $$('vd' + p.id); fpsN[p.id] = 0;
-    if (vid && vid.requestVideoFrameCallback) { const loop = () => { fpsN[p.id]++; vid.requestVideoFrameCallback(loop); }; vid.requestVideoFrameCallback(loop); }
-  });
-  fpsT = setInterval(async () => {
-    const now = performance.now();
+/* Statistik tiap kartu (1 dtk sekali): FPS gambar yang benar-benar dirender di layar Master + bandwidth data yang diterima */
+let statsT = 0;
+function startStats(players) {
+  clearInterval(statsT);
+  statsT = setInterval(() => {
     for (const p of players) {
-      const el = $$('fp' + p.id); if (!el) continue;
-      const l = links[p.id], vid = $$('vd' + p.id); let fps = null;
-      if (l && l.ok) {
-        if (vid && vid.requestVideoFrameCallback) { const last = fpsLast[p.id]; if (last) fps = (fpsN[p.id] - last.n) * 1000 / (now - last.t); fpsLast[p.id] = { n: fpsN[p.id], t: now }; }
-        else { try { (await l.pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video' && r.framesPerSecond != null) fps = r.framesPerSecond; }); } catch (e) { } }
-      } else delete fpsLast[p.id];
-      let res = '', tip = '';
-      if (l && l.ok) { try { (await l.pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'video') {
-        if (r.frameHeight) res = ' · ' + r.frameHeight + 'p';
-        const pl = r.packetsLost || 0, pr = r.packetsReceived || 0;
-        tip = 'Resolusi ' + (r.frameWidth || '?') + '×' + (r.frameHeight || '?') + ' · paket hilang ' + (pl + pr ? (pl * 100 / (pl + pr)).toFixed(1) : 0) + '% · frame dibuang ' + (r.framesDropped || 0) + ' · freeze ' + (r.freezeCount || 0) + ' · jitter ' + Math.round((r.jitter || 0) * 1000) + ' ms';
-      } }); } catch (e) { } }
-      el.className = 'fps ' + (fps == null ? 'none' : fps >= VID.fps - 3 ? '' : fps >= 15 ? 'mid' : 'low');
-      el.textContent = fps == null ? '— FPS' : Math.round(fps) + ' FPS' + res; el.title = tip;
+      const el = $$('fp' + p.id), r = reps[p.id]; if (!el || !r) continue;
+      const o = r.tick(), shown = !r.hidden;
+      el.className = 'fps ' + (!r.has ? 'none' : !shown ? 'none' : o.fps >= 50 ? '' : o.fps >= 25 ? 'mid' : 'low');
+      el.textContent = !r.has ? '— FPS' : (shown ? o.fps : '⏸') + ' FPS · ' + o.kbps + ' kbps' + (Live.master.lite && shown ? ' · hemat' : '');
+      el.title = 'Gambar ' + o.fps + ' FPS (digambar ulang di perangkat ini, bukan video) · data ' + o.hz + ' paket/dtk · ' + o.kbps + ' kbps · paket hilang ' + o.loss + '% · buffer ' + o.delay + ' ms · waktu gambar ' + o.ms + ' ms/frame' + (Live.master.lite ? ' · MODE HEMAT: perangkat Master tidak cukup cepat menggambar semua kartu 60 FPS (tutup tab lain, perbesar satu kartu, atau pakai laptop yang lebih kuat)' : '');
     }
   }, 1000);
 }
 function updateLinkUI(id) {
-  const vs = document.querySelector('#vs' + id), l = links[id]; if (!vs) return;
-  const vid = document.querySelector('#vd' + id), ok = (l && l.ok) || (!l && vid && vid.srcObject);   // tanpa tautan tapi ada gambar terakhir: tetap tampil
+  const vs = document.querySelector('#vs' + id), l = links[id], r = reps[id]; if (!vs) return;
+  const ok = (l && l.ok && r && r.has) || (!l && r && r.has);   // tanpa tautan tapi ada gambar terakhir: tetap tampil
   vs.className = 'vs' + (ok ? ' ok' : '');
-  if (!ok) vs.textContent = !l ? 'Video tidak tersedia' : (l.tries > 2 && !l.everOk ? (iceRelay ? '📡 Video belum tersambung, mencoba lagi… Skor tetap tampil.' : '📡 Video tidak bisa tersambung: server TURN belum diatur (lihat README). Skor tetap tampil.') : (l.everOk ? '📡 Video terputus, menyambung ulang…' : '📡 Menyambungkan video…'));
+  if (!ok) vs.textContent = !l ? 'Gameplay tidak tersedia' : (l.n > 2 ? (iceRelay ? '📡 Gameplay belum tersambung, mencoba lagi… Skor tetap tampil.' : '📡 Gameplay tidak bisa tersambung: server TURN belum diatur (lihat README). Skor tetap tampil.') : '📡 Menyambungkan gameplay…');
 }
 function maintainLinks(v) {
   v.players.forEach(p => {
@@ -361,11 +319,9 @@ function maintainLinks(v) {
     const l = links[p.id];
     if (!active) { if (l && (p.done || p.left)) { closeLink(p.id); updateLinkUI(p.id); } return; }
     if (!l) { openLink(p.id); return; }
-    const st = l.pc.connectionState, now = Date.now();
-    if (st === 'connected') { l.dropAt = 0; return; }
-    const bad = st === 'failed' || st === 'closed' || (st === 'disconnected' && l.dropAt && now - l.dropAt > LINK_GRACE_MS);   // 'disconnected' sering pulih sendiri: beri tenggang
-    const stuck = !l.ok && st !== 'disconnected' && now - l.t > Math.min(12000, LINK_RETRY_MS + 2500 * (l.tries - 1));   // makin lama makin sabar (jaringan lambat / relay TURN)
-    if (!l.busy && (bad || stuck) && (l.everOk || l.tries < LINK_MAX_TRIES)) openLink(p.id);
+    const bad = ['failed', 'disconnected', 'closed'].includes(l.pc.connectionState);
+    if (!l.ok && !l.busy && (bad || Date.now() - l.t > LINK_RETRY_MS) && l.n < LINK_MAX_TRIES) { openLink(p.id); }
+    else if (l.ok && bad) { l.ok = false; openLink(p.id); }
   });
 }
 
@@ -376,12 +332,13 @@ function showMasterGrid() {
     ol.className = 'full'; shownKey = 'grid' + v.gameNo; if (window.armFS) window.armFS();
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
-      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><video id="vd${p.id}" autoplay muted playsinline></video><div class="vs" id="vs${p.id}">📡 Menyambungkan video…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="640" height="360"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
       <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
       <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };
-    startFps(v.players);
-    v.players.forEach(p => { $$('vw' + p.id).onclick = () => { const mg = $$('mg'), t = $$('tl' + p.id), on = !t.classList.contains('zm'); mg.querySelectorAll('.tl').forEach(x => x.classList.remove('zm')); mg.classList.toggle('focus', on); if (on) t.classList.add('zm'); }; });
+    v.players.forEach(p => { reps[p.id] = new Live.Replica($$('vd' + p.id)); });
+    Live.master.start(reps); startStats(v.players);
+    v.players.forEach(p => { $$('vw' + p.id).onclick = () => { const mg = $$('mg'), t = $$('tl' + p.id), on = !t.classList.contains('zm'); mg.querySelectorAll('.tl').forEach(x => x.classList.remove('zm')); mg.classList.toggle('focus', on); if (on) t.classList.add('zm'); v.players.forEach(q => { const r = reps[q.id]; if (r) { r.hidden = on && q.id !== p.id; r.big = on && q.id === p.id; } }); }; });
   }
   const done = v.players.filter(p => p.done).length;
   $$('ms').textContent = done + '/' + v.players.length + ' pemain selesai';
@@ -444,7 +401,7 @@ function startPlayer(seed) {
   };
   players = [V.myName]; results = []; pi = 0; started = true;
   beginTurn(); closeMenu();
-  sendStats(); statT = setInterval(sendStats, 2000); boostFast(); getIce();
+  sendStats(); statT = setInterval(sendStats, 2000); fastOfferCheck(); getIce();
 }
 const liveStats = () => {
   const r = results[0];
@@ -454,10 +411,9 @@ const liveStats = () => {
 async function sendStats() {
   if (!ON || overSent || !playing) return;
   try {
-    const j = await call('stats', { stats: liveStats(), sigN: sendN, cN: candN });
+    const j = await call('stats', { stats: liveStats(), sigN: sendN });
     failCount = 0;
     if (j.offer && j.offer.n !== sendN) answerOffer(j.offer);
-    if (j.oc) gotMasterCands(j.oc);
     if (V && (j.status !== 'playing' || j.gameNo !== V.gameNo)) pollOnce();
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
 }
@@ -476,123 +432,40 @@ async function sendOver() {
 }
 function stopStats() { clearInterval(statT); statT = 0; }
 
-/* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC, 360p · 24 fps, dikunci) ---------- */
-let sendPC = null, sendN = 0, sendBusy = false, feed = null, fastT = 0, fastBudget = 0, candN = 0, remoteRd = false, remotePend = [];
-/* Kanvas game 960×540 diperkecil ke 640×360 (360p) dan diambil 24 fps: ringan di HP pemain & tidak membebani Master. */
-function makeFeed() {
-  if (feed) return feed;
-  const src = document.getElementById('c'), cv = document.createElement('canvas'); cv.width = VID.w; cv.height = VID.h;
-  const g = cv.getContext('2d', { alpha: false }), period = 1000 / VID.fps; let on = true, timer = 0, next = performance.now();
-  // captureStream(0) + requestFrame(): frame hanya dikirim saat kita minta, tepat tiap 33,3 ms (tidak tergantung refresh layar 50/75/144 Hz)
-  const manual = typeof CanvasCaptureMediaStreamTrack !== 'undefined' && 'requestFrame' in CanvasCaptureMediaStreamTrack.prototype;
-  const stream = cv.captureStream(manual ? 0 : VID.fps), track = stream.getVideoTracks()[0];   // tanpa requestFrame: pakai captureStream(30) biasa
-  const grab = () => { if (manual) try { track.requestFrame(); } catch (e) { } };
-  const pump = () => {
-    if (!on) return;
-    const now = performance.now();
-    if (now >= next - 1) {
-      try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }   // bila game lambat, frame terakhir diulang → aliran tetap 24 fps
-      grab();
-      next += period; if (now - next > period * 3) next = now + period;   // tertinggal jauh: jangan menyusul beruntun
-    }
-    timer = setTimeout(pump, Math.max(1, next - performance.now()));
-  };
-  try { g.drawImage(src, 0, 0, VID.w, VID.h); } catch (e) { }
-  pump();
-  stream.getVideoTracks().forEach(t => { try { t.contentHint = 'motion'; } catch (e) { } });   // 'motion' = maintain-framerate: yang dikorbankan resolusi, bukan FPS
-  return feed = { stream, stop() { on = false; clearTimeout(timer); stream.getTracks().forEach(t => t.stop()); } };
-}
-function tuneSender(pc) {
-  pc.getSenders().forEach(sn => { try {
-    if (!sn.track) return;
-    const pr = sn.getParameters(); pr.encodings = pr.encodings && pr.encodings.length ? pr.encodings : [{}];
-    Object.assign(pr.encodings[0], { maxBitrate: VID.kbps * 1000, maxFramerate: VID.fps, scaleResolutionDownBy: SCALES[adaptLv], priority: 'high', networkPriority: 'high' });
-    pr.degradationPreference = 'maintain-framerate';   // Firefox/Safari; di Chrome efeknya lewat track.contentHint = 'motion'
-    sn.setParameters(pr).catch(() => { });
-  } catch (e) { } });
-}
-/* Pengatur resolusi otomatis (sisi pemain): FPS dikunci 30, yang dikorbankan hanya resolusi.
-   Tiap 1 dtk baca statistik pengirim: bila FPS encoder < 27 / paket hilang banyak / bandwidth tak cukup → resolusi turun 1 tingkat;
-   naik lagi pelan-pelan (setelah 8 dtk stabil) bila bandwidth cukup. */
-function startAdapt(pc) {
-  clearInterval(adaptT); let prev = null, good = 0, busy = false;
-  adaptT = setInterval(async () => {
-    if (busy || sendPC !== pc || pc.connectionState !== 'connected') return; busy = true;
-    try {
-      let out = null, avail = null, lost = 0;
-      (await pc.getStats()).forEach(r => {
-        if (r.type === 'outbound-rtp' && r.kind === 'video') out = r;
-        else if (r.type === 'candidate-pair' && r.nominated && r.availableOutgoingBitrate) avail = r.availableOutgoingBitrate;
-        else if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && r.fractionLost != null) lost = r.fractionLost;
-      });
-      if (!out) return;
-      const cur = { n: out.framesEncoded, t: performance.now() };
-      const fps = prev ? (cur.n - prev.n) * 1000 / (cur.t - prev.t) : null; prev = cur;
-      if (fps == null) return;
-      let want = 0;   // tingkat terkecil yang masih tertopang bandwidth (≥ ±0,09 bit/piksel/frame)
-      if (avail) { const bud = Math.min(avail, VID.kbps * 1000) * 0.85; while (want < SCALES.length - 1 && VID.w * VID.h / (SCALES[want] * SCALES[want]) * VID.fps * 0.09 > bud) want++; }
-      let lv = adaptLv;
-      if (fps < 27 || lost > 0.04) { lv = Math.min(lv + 1, SCALES.length - 1); good = 0; }
-      else if (want > lv) { lv = want; good = 0; }
-      else if (want < lv && ++good >= 8) { lv--; good = 0; }
-      else if (want >= lv) good = 0;
-      if (lv !== adaptLv) { adaptLv = lv; prev = null; pc.getSenders().forEach(sn => { try { if (!sn.track) return; const pr = sn.getParameters(); if (!pr.encodings || !pr.encodings.length) return; pr.encodings[0].scaleResolutionDownBy = SCALES[lv]; sn.setParameters(pr).catch(() => { }); } catch (e) { } }); }
-    } catch (e) { } finally { busy = false; }
-  }, 1000);
-}
+/* ---------- sisi pemain: kirim data gameplay ke Room Master (DataChannel; pembacaan state game & pengodean ada di live.js) ---------- */
+let sendPC = null, sendN = 0, sendBusy = false, fastT = 0;
 function stopBroadcast() {
+  Live.emitter.stop();
   if (sendPC) { try { sendPC.close(); } catch (e) { } } sendPC = null;
-  if (feed) { feed.stop(); feed = null; }
-  clearInterval(fastT); fastT = 0; clearInterval(adaptT); adaptT = 0;
-}
-function flushRemote() {
-  if (!sendPC || !remoteRd) return;
-  while (remotePend.length) { let c; try { c = JSON.parse(remotePend.shift()); } catch (e) { continue; } sendPC.addIceCandidate(c).catch(() => { }); }
-}
-/* Kandidat ICE Master (trickle) dari balasan statistik: oc = { n, from, c: [...] } */
-function gotMasterCands(oc) {
-  if (!oc || oc.n !== sendN || oc.from !== candN) return;
-  candN += oc.c.length; remotePend.push(...oc.c); flushRemote();
+  clearInterval(fastT); fastT = 0;
 }
 async function answerOffer(offer) {
   if (sendBusy || typeof RTCPeerConnection === 'undefined') return;
-  sendBusy = true; sendN = offer.n; candN = 0; remoteRd = false; remotePend = [];
-  boostFast();
+  sendBusy = true;
   try {
     const ice = await getIce();
-    if (sendPC) { try { sendPC.close(); } catch (e) { } sendPC = null; }
-    const stream = makeFeed().stream, n = offer.n, lc = [];
-    const pc = sendPC = new RTCPeerConnection(ice);
-    const push = makeTrickle(lc, list => sendPC === pc ? call('signal', { kind: 'cand', n, c: list }) : Promise.resolve());
-    pc.onicecandidate = ev => { if (ev.candidate && lc.length < MAX_CAND) { lc.push(candStr(ev.candidate)); push(); } };
-    pc.addEventListener('connectionstatechange', () => {
-      if (sendPC !== pc) return;
-      if (pc.connectionState === 'connected') tuneSender(pc);
-      else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) boostFast();   // cepat cek penawaran baru dari Master
-    });
-    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+    if (sendPC) { try { sendPC.close(); } catch (e) { } sendPC = null; Live.emitter.stop(); }
+    const pc = sendPC = new RTCPeerConnection(ice), chs = {};
+    const tryStart = () => { if (sendPC === pc && chs.st && chs.ev && chs.st.readyState === 'open' && chs.ev.readyState === 'open') Live.emitter.start(chs.st, chs.ev); };
+    pc.ondatachannel = e => {
+      const ch = e.channel; ch.binaryType = 'arraybuffer'; chs[ch.label] = ch;
+      ch.onopen = tryStart; ch.onclose = () => { if (sendPC === pc) Live.emitter.stop(); };
+      tryStart();
+    };
+    pc.addEventListener('connectionstatechange', () => { if (sendPC === pc && ['failed', 'closed', 'disconnected'].includes(pc.connectionState)) Live.emitter.stop(); });
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
-    if (sendPC !== pc) return;
-    remoteRd = true; flushRemote();
-    tuneSender(pc);
     await pc.setLocalDescription(await pc.createAnswer());
-    tuneSender(pc);   // diulang setelah negosiasi: sebelumnya setParameters bisa gagal diam-diam karena encodings belum ada
+    await waitIce(pc, 4000, ice.relay);
     if (sendPC !== pc) return;
-    await call('signal', { kind: 'answer', n, sdp: pc.localDescription.sdp });   // answer langsung dikirim; kandidat menyusul (trickle)
-    push();
+    await call('signal', { kind: 'answer', n: offer.n, sdp: pc.localDescription.sdp });
+    sendN = offer.n;
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
   finally { sendBusy = false; }
 }
-/* Selama siaran belum tersambung (atau baru putus), pemain mengecek penawaran Master tiap 0,7 dtk (±28 dtk) supaya gambar muncul / pulih cepat.
-   Setelah tersambung tidak ada pengecekan tambahan; tanpa Room Master berhenti sendiri sehingga tidak membebani Redis. */
-function boostFast() {
-  fastBudget = 40;
-  if (fastT) return;
-  fastT = setInterval(() => {
-    if (!playing || overSent) { clearInterval(fastT); fastT = 0; return; }
-    if (sendPC && sendPC.connectionState === 'connected') return;
-    if (fastBudget-- > 0) sendStats(); else { clearInterval(fastT); fastT = 0; }
-  }, 700);
+/* Sebelum gameplay tersambung, pemain mengecek penawaran Master lebih sering (0,7 dtk) supaya gambar muncul cepat. */
+function fastOfferCheck() {
+  clearInterval(fastT); let n = 0;
+  fastT = setInterval(() => { if (!playing || overSent || sendN > 0 || ++n > 40) { clearInterval(fastT); fastT = 0; return; } sendStats(); }, 700);
 }
 
 /* ---------- awal ---------- */

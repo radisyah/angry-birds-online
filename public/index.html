@@ -2,9 +2,9 @@
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1433">
-<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Math Birds">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="BlockShot">
 <link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="icon" href="/icon-192.png">
-<title>Angry Birds — Math Edition Online</title>
+<title>BlockShot Online</title>
 <style>
 :root{--bg:#f3efe6;--fg:#2a2118;--card:#fff;--ac:#d62828}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1914;--fg:#f1e9dc;--card:#2a251d}}
@@ -72,7 +72,7 @@ table.sb{width:100%;border-collapse:collapse}
 <div id="ov"><div id="ot"></div><div id="os"></div><div id="on"></div><div id="orow"><button id="ob"></button><button id="om">☰ Menu</button></div></div>
 <div id="menu">
  <div class="mc" id="home">
-  <div class="logo">🐦 Angry Birds<small>Math Edition</small></div>
+  <div class="logo">🐦 BlockShot</div>
   <p class="how">Tarik burung dari ketapel lalu lepas · tap saat terbang untuk skill<br>Tembak blok berangka yang menjawab soal · salah = nyawa berkurang<br>⭐ Makin <b>sedikit tembakan</b> &amp; makin <b>cepat</b> menjawab = poin makin besar</p>
   <div id="pl"><div class="plh">👥 Peserta <small>(main bergiliran · tiap peserta 15 soal · skor akhir tampil semua)</small></div><div id="pls"></div><button id="pa">＋ Tambah peserta</button></div>
   <button id="go"></button>
@@ -636,4 +636,4 @@ if(window.speechSynthesis)speechSynthesis.getVoices();
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&window.speechSynthesis)speechSynthesis.cancel()});
 load(0);openMenu();requestAnimationFrame(tick);
 </script>
-<script src="/online.js"></script></body></html>
+<script src="/live.js"></script><script src="/online.js"></script></body></html>

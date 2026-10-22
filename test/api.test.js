@@ -157,34 +157,10 @@ const fin = (score, extra) => Object.assign({ score, win: true, ok: 15, wrong: 1
     const s1 = await post('stats', { code: m.code, token: b.token, stats: { score: 5 }, sigN: 0 }); assert(!s1.offer);  // offer milik pemain lain tidak bocor
     assert((await post('signal', { code: m.code, token: a.token, kind: 'answer', n: 1, sdp: 'ANSWER-A' })).ok);
     let ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '' });
-    assert.deepStrictEqual(ms.view.sigs, { '0': { a: { n: 1, sdp: 'ANSWER-A' } } });
+    assert.deepStrictEqual(ms.view.sigs, { '0': { n: 1, sdp: 'ANSWER-A' } });
     ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '0:1' }); assert(!ms.view.sigs);             // sudah diproses: tidak dikirim ulang
     const pv = await state(m.code, a.token); assert(!JSON.stringify(pv.view).includes('ANSWER-A'));                       // pemain tidak menerima jawaban
     const old = await api('GET', null, { code: m.code, token: m.token, v: 0, g: g + 5 }); assert(!old.view.sigs);          // gameNo lain: kosong
-  });
-  await T('trickle ICE: kandidat Master -> pemain dan pemain -> Master (bertahap, per nomor tautan)', async () => {
-    const m = await post('create', { name: 'Guru', role: 'master' }), a = await post('join', { code: m.code, name: 'Ayu' }), b = await post('join', { code: m.code, name: 'Budi' });
-    await post('ready', { code: m.code, token: a.token, ready: true }); await post('ready', { code: m.code, token: b.token, ready: true });
-    const g = (await post('start', { code: m.code, token: m.token })).view.gameNo;
-    assert((await post('signal', { code: m.code, token: m.token, kind: 'offer', to: '0', n: 2, sdp: 'OFFER' })).ok);
-    assert((await post('signal', { code: m.code, token: m.token, kind: 'cand', to: '0', n: 2, c: ['c1', 'c2'] })).ok);
-    let r = await post('stats', { code: m.code, token: a.token, stats: {}, sigN: 0, cN: 0 });
-    assert(r.offer.n === 2 && r.oc.n === 2 && r.oc.from === 0 && r.oc.c.length === 2);
-    assert((await post('signal', { code: m.code, token: m.token, kind: 'cand', to: '0', n: 2, c: ['c1', 'c2', 'c3'] })).ok);
-    r = await post('stats', { code: m.code, token: a.token, stats: {}, sigN: 2, cN: 2 });
-    assert(!r.offer && r.oc.from === 2 && JSON.stringify(r.oc.c) === '["c3"]');
-    r = await post('stats', { code: m.code, token: a.token, stats: {}, sigN: 2, cN: 3 }); assert(!r.oc);              // sudah lengkap
-    r = await post('stats', { code: m.code, token: b.token, stats: {}, sigN: 0, cN: 0 }); assert(!r.oc);              // tidak bocor ke pemain lain
-    assert((await post('signal', { code: m.code, token: m.token, kind: 'offer', to: '0', n: 3, sdp: 'OFFER3' })).ok);
-    r = await post('stats', { code: m.code, token: a.token, stats: {}, sigN: 2, cN: 3 }); assert(r.offer.n === 3 && !r.oc);   // kandidat lama (n=2) tidak ikut offer baru
-    assert((await post('signal', { code: m.code, token: a.token, kind: 'cand', n: 3, c: ['p1', 'p2'] })).ok);
-    let ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '', lc: '0:3:0' });
-    assert.deepStrictEqual(ms.view.sigs, { '0': { c: { n: 3, from: 0, c: ['p1', 'p2'] } } });
-    ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '', lc: '0:3:2' }); assert(!ms.view.sigs);
-    ms = await api('GET', null, { code: m.code, token: m.token, v: 0, g, an: '', lc: '0:2:0' }); assert(!ms.view.sigs);   // nomor tautan lain
-    assert.strictEqual((await post('signal', { code: m.code, token: a.token, kind: 'cand', n: 3, c: [1] })).http, 400);
-    assert.strictEqual((await post('signal', { code: m.code, token: a.token, kind: 'cand', n: 3, c: Array(41).fill('x') })).http, 400);
-    assert.strictEqual((await post('signal', { code: m.code, token: m.token, kind: 'cand', to: '9', n: 3, c: [] })).http, 404);
   });
   await T('daftar ICE: hanya untuk sesi sah; tanpa TURN = STUN saja; dengan TURN statis/HMAC ada relay', async () => {
     const ice = require('../lib/ice.js');

@@ -1,4 +1,4 @@
-/* Angry Birds Math Online: aturan bersama (dipakai SERVER untuk menyaring & menghitung papan skor, dan KLIEN untuk tampilan).
+/* BlockShot Online: aturan bersama (dipakai SERVER untuk menyaring & menghitung papan skor, dan KLIEN untuk tampilan).
    Fisika permainan berjalan di perangkat tiap pemain; server memegang seed soal, status room, dan papan skor akhir. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
