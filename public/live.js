@@ -9,7 +9,7 @@
    Master mem-buffer ±100 ms dan menginterpolasi antar snapshot, sehingga 60 fps tetap halus walau jaringan bergetar. */
 (function (root) {
 'use strict';
-const STEP = 1000 / 60, TAU = Math.PI * 2, OFF = 1024, SC = 16, HDR = 20, BODY = 9, PART = 15, MAXPKT = 1100;
+const STEP = 1000 / 60, FPS_LOCK = 60, LOCK60 = true, CARD_W = 1280, CARD_H = 720, TAU = Math.PI * 2, OFF = 1024, SC = 16, HDR = 20, BODY = 9, PART = 15, MAXPKT = 1100;
 const STN = ['settle', 'ready', 'drag', 'fly'], STI = { settle: 0, ready: 1, drag: 2, fly: 3 };
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const qPos = v => clamp(Math.round((v + OFF) * SC), 0, 65535), dPos = u => u / SC - OFF;
@@ -69,7 +69,7 @@ function decodeSnap(buf) {
   return o;
 }
 
-const api = { encodeSnap, decodeSnap, colorInt, hexColor, qPos, dPos, qAng, dAng, STEP };
+const api = { FPS_LOCK, CARD_W, CARD_H, encodeSnap, decodeSnap, colorInt, hexColor, qPos, dPos, qAng, dAng, STEP };
 if (typeof window === 'undefined') { if (typeof module !== 'undefined') module.exports = api; return; }
 
 /* =====================================================================================================
@@ -80,9 +80,16 @@ const emitter = {
   active: false, hooked: false, chSt: null, chEv: null, known: new Map(), idc: 0, seq: 0, pend: [], txq: [], metaKey: '', scKey: '', forceKey: true, sentBytes: 0,
   install() {
     if (this.hooked) return; this.hooked = true;
-    const self = this, oStep = window.step, oP = window.P;
+    const self = this, oStep = window.step, oP = window.P, oSkill = window.skill;
     window.step = function () { oStep.apply(this, arguments); if (self.active) { try { self.onStep(); } catch (e) { console.error('live:', e); } } };
     window.P = function (o) { oP.apply(this, arguments); if (self.active) self.collect(o); };
+    // notifikasi skill burung → Room Master (kanal andal 'ev'); hanya bila skill benar-benar terpakai (bukan Terence yang tanpa skill)
+    if (typeof oSkill === 'function') window.skill = function (b) {
+      const ok = !!(b && B[b.type] && !b.used && !b.dead && b.type !== 'terence');
+      const r = oSkill.apply(this, arguments);
+      if (ok && b.used && self.active) { try { self.sendSkill(b); } catch (e) { console.error('live skill:', e); } }
+      return r;
+    };
   },
   start(chSt, chEv) {
     this.install(); this.chSt = chSt; this.chEv = chEv;
@@ -99,6 +106,10 @@ const emitter = {
   meta() {
     return { sc: score, h: hearts, sk: streak, cl: cleared, sh: shots, qi: qIdx, q: qText, a: ans, w: wrongQ, lv: lvl, ng: night ? 1 : 0, qs: Math.round(qStart), dn: done ? 1 : 0,
       bq: (birds || []).slice(0, 5), cu: cur && cur.type || null, cr: cur && typeof cur.r === 'number' ? cur.r : 0 };
+  },
+  sendSkill(b) {
+    const ch = this.chEv; if (!ch || ch.readyState !== 'open') return;
+    ch.send(JSON.stringify({ t: 'sk', n: frame, ty: b.type, x: r2(b.position.x), y: r2(b.position.y), au: b.auto ? 1 : 0 }));
   },
   newId() { this.idc = (this.idc % 65534) + 1; return this.idc; },
   onStep() {
@@ -153,7 +164,7 @@ const emitter = {
    ===================================================================================================== */
 class Replica {
   constructor(cv) {
-    this.cv = cv; this.cx = cv.getContext('2d', { alpha: false });
+    this.cv = cv; this.cx = cv.getContext('2d', { alpha: false }); this.onSkill = null;
     this.hud = document.createElement('canvas'); this.hud.width = 960; this.hud.height = 100; this.hcx = this.hud.getContext('2d');
     this.hidden = false; this.big = false; this.D = 6; this.off = null; this.has = false; this.lastSeq = -1;
     this.stat = { bytes: 0, pk: 0, frames: 0, ms: 0, lost: 0, exp: 0, starve: 0, calm: 0, out: { fps: 0, kbps: 0, hz: 0, loss: 0, delay: 100, ms: 0 } };
@@ -173,6 +184,7 @@ class Replica {
     let e; try { e = JSON.parse(str); } catch (er) { return; }
     this.stat.bytes += str.length;
     if (e.t === 'reset') { this.clearWorld(); return; }
+    if (e.t === 'sk') { this.evq.push({ n: e.n, sk: e }); return; }   // diterapkan saat waktu simulasi Master mencapai langkah itu (sinkron dengan gambar)
     if (e.t !== 'e') return;
     if (e.rm) for (const id of e.rm) { const b = this.map.get(id); if (b) b.die = e.n; }
     if (e.nb) for (const d of e.nb) this.addBody(d, e.n, 0);
@@ -203,6 +215,7 @@ class Replica {
   simT(now) { return (now - this.off) / STEP - this.D; }
   spawn(o) { this.nspawn = (this.nspawn || 0) + 1; if (o.k === 'txt') this.ntxt = (this.ntxt || 0) + 1; o.L = o.l; if (o.g === undefined) o.g = .3; this.parts.push(o); if (this.parts.length > 600) this.parts.splice(0, this.parts.length - 600); }
   applyEv(e) {
+    if (e.sk && this.onSkill) { try { this.onSkill(e.sk); } catch (er) { } }
     if (e.bu) for (const u of e.bu) { const b = this.map.get(u.i); if (b) { if (u.t !== undefined) b.t = u.t; b.mat = u.m; b.dent = u.d; b.frozen = !!u.f; } }
     if (e.m) Object.assign(this.m, e.m);
     if (e.tx) for (const t of e.tx) this.spawn({ k: 'txt', x: t.x, y: t.y, vx: t.vx, vy: t.vy, g: t.g, l: t.l, c: t.c, tx: t.tx });
@@ -244,7 +257,7 @@ class Replica {
       this.sample(b, T); (b.k === 0 ? vItems : vFlock).push(b);
     }
     const m = this.m, s = this.s;
-    const W0 = this.big ? 960 : 640, H0 = this.big ? 540 : 360;
+    const W0 = CARD_W, H0 = CARD_H;   // resolusi kartu dikunci 1280×720 (720p), baik kartu biasa maupun diperbesar
     if (this.cv.width !== W0) { this.cv.width = W0; this.cv.height = H0; }
     const playMsNow = m.dn ? this.last.playMs : this.last.playMs + Math.min(1000, Math.max(0, (T - this.last.n) * STEP));
     const t0 = performance.now();
@@ -275,7 +288,7 @@ class Replica {
 
 /* Penggerak render Master: satu loop rAF untuk semua replika; loop bawaan game dimatikan & drawHUD diganti (cache HUD per pemain) */
 const master = {
-  reps: null, on: false, raf: 0, cur: null, lite: false, load: 0, fno: 0, oTick: null, oHUD: null, dead: false, swapped: false,
+  reps: null, on: false, raf: 0, cur: null, lite: false, load: 0, fno: 0, nextR: 0, oTick: null, oHUD: null, dead: false, swapped: false,
   start(reps) {
     this.stop(); this.reps = reps; this.on = true;
     if (!this.swapped) {
@@ -290,15 +303,20 @@ const master = {
         else g.drawImage(R.hud, 0, 0);
       };
     }
+    this.nextR = 0;
     const loop = now => {
       if (!this.on) return; this.raf = requestAnimationFrame(loop);
+      // kunci 60 FPS: layar 90/120/144 Hz tidak menggambar lebih dari 60×/dtk; layar 60 Hz tetap tiap frame (toleransi 1,5 ms untuk jitter rAF)
+      if (!this.nextR || now - this.nextR > STEP * 3) this.nextR = now;
+      if (now + 1.5 < this.nextR) return;
+      this.nextR += STEP;
       const t0 = performance.now(); let k = 0; this.fno++;
       for (const id in this.reps) {
         // mode hemat: perangkat Master tidak sanggup menggambar semua kartu tiap frame → kartu bergantian (tiap kartu 30 FPS); logika & interpolasi tetap jalan
         try { this.reps[id].render(now, this.lite && ((this.fno + k++) & 1)); } catch (e) { console.error('live render:', e); }
       }
       this.load = this.load * .9 + (performance.now() - t0) * .1;
-      if (this.fno % 30 === 0) { if (!this.lite && this.load > 13) this.lite = true; else if (this.lite && this.load < 4.5) this.lite = false; }
+      if (!LOCK60 && this.fno % 30 === 0) { if (!this.lite && this.load > 13) this.lite = true; else if (this.lite && this.load < 4.5) this.lite = false; }   // mode hemat (30 FPS) mati selama LOCK60 = true
     };
     this.raf = requestAnimationFrame(loop);
   },

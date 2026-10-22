@@ -16,13 +16,14 @@ Room Master ────┼─ polling ─ /api/room ───┤
 - **Buat Ruangan** (pembuat = Pemain 1 & pemilik) atau **Jadi Room Master** (hanya memantau, tidak bermain). Teman bergabung dengan kode / tombol *Salin Tautan* (`?room=KODE`).
 - 2–4 pemain. Pemain menekan *Saya siap*; pemilik (Room Master bila ada, kalau tidak Pemain 1) menekan *Mulai*.
 - Saat bermain, tiap pemain mengirim statistik (skor, nyawa, soal, streak) tiap ±2 detik. **Room Master melihat gameplay langsung Pemain 1–4**
-  (**gameplay digambar ulang di Master dari data posisi, bukan video**; tampil lengkap dengan soal & HUD pada resolusi 640×360 di kartu, 960×540 saat diperbesar, **60 FPS**; FPS & kbps aktual tampil di pojok kanan atas tiap kartu)
+  (**gameplay digambar ulang di Master dari data posisi, bukan video**; tampil lengkap dengan soal & HUD pada resolusi **dikunci 1280×720 (720p)** di kartu maupun saat diperbesar, **dikunci maks. 60 FPS**; FPS, 720p & kbps aktual tampil di pojok kanan atas tiap kartu;
+  **notifikasi skill burung**: saat pemain menekan skill, kartunya menampilkan banner nama burung + efek skill selama ±2,6 dtk)
   plus skor/nyawa/progres di tiap kartu; klik kartu untuk memperbesar satu pemain (kartu lain berhenti digambar → hemat CPU). Master juga bisa *Hentikan permainan*.
 - **Cara siaran (hemat bandwidth, ±10× lebih ringan dari video):** fisika tetap berjalan di perangkat tiap pemain. Pemain mengirim lewat WebRTC DataChannel peer-to-peer
   (a) snapshot biner posisi objek 60 Hz (9 byte/objek, hanya objek yang bergerak; keyframe penuh tiap 1 dtk) lewat kanal *tidak andal* (paket hilang tidak ditunggu → tidak patah-patah) dan
   (b) kejadian penting (blok baru/hilang, skor, nyawa, soal, teks melayang) lewat kanal *andal*. Master mem-buffer ±100 ms, menginterpolasi antar snapshot, lalu menggambar dengan `draw()` game yang sama.
   Bandwidth ≈ 20–80 kbps per pemain biasa, maks. ±140 kbps bila ±25 objek bergerak tiap frame (video 360p60 ≈ 1200+ kbps). Server (Vercel) hanya menukar sinyal offer/answer.
-  Buffer menyesuaikan sendiri (100–330 ms) bila jaringan bergetar. Bila laptop Master tak sanggup menggambar semua kartu 60 FPS, **mode hemat** otomatis (tiap kartu bergantian, 30 FPS) dan label kartu menulis "hemat".
+  Buffer menyesuaikan sendiri (100–330 ms) bila jaringan bergetar. FPS dikunci 60 (layar 90/120/144 Hz tidak menggambar lebih dari 60×/dtk) dan **mode hemat 30 FPS dimatikan** (`LOCK60 = true` di `public/live.js`; ubah ke `false` bila ingin mode hemat otomatis di laptop lemah). Kartu digambar dari game 960×540 lalu diskalakan ke 1280×720.
   Penyambungan dipercepat: Master & pemain mengecek sinyal tiap ±0,6–0,7 dtk sampai tersambung (biasanya < 3 dtk), lalu kembali normal.
 - **Agar Master bisa melihat dari SEMUA jaringan (4G/CGNAT, wifi sekolah/kantor, NAT ketat) wajib mengaktifkan server TURN (relay).**
   STUN saja hanya menembus sebagian jaringan. Pilih salah satu dan isi di Vercel → Settings → Environment Variables, lalu Redeploy:

@@ -95,7 +95,7 @@ try:
         check('perubahan bahan blok (es) & retak tersalin ke Master', ice)
         sc = M.evaluate("Object.values(Live.master.reps).map(r=>r.m.q+'|'+r.m.sc)")
         check('Master menerima soal & skor pemain lewat kanal andal', all(x.split('|')[0] != '' for x in sc), sc)
-        M.wait_for_function("[...document.querySelectorAll('#mg .fps')].every(e=>/^\\d+ FPS · \\d+ kbps( · hemat)?$/.test(e.textContent))", timeout=10000)
+        M.wait_for_function("[...document.querySelectorAll('#mg .fps')].every(e=>/^\\d+ FPS · 720p · \\d+ kbps( · hemat)?$/.test(e.textContent))", timeout=10000)
         fps = M.evaluate("[...document.querySelectorAll('#mg .fps')].map(e=>e.textContent)")
         print('    label di kartu:', fps)
         check('kartu menampilkan FPS & kbps', all('FPS' in f and 'kbps' in f for f in fps), fps)
