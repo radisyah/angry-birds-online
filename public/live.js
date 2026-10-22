@@ -11,7 +11,6 @@
 'use strict';
 const STEP = 1000 / 60, TAU = Math.PI * 2, OFF = 1024, SC = 16, HDR = 20, BODY = 9, PART = 15, MAXPKT = 1100;
 const STN = ['settle', 'ready', 'drag', 'fly'], STI = { settle: 0, ready: 1, drag: 2, fly: 3 };
-const RW = 640, RH = 360, RS = RW / 960, rawST = typeof CanvasRenderingContext2D !== "undefined" ? CanvasRenderingContext2D.prototype.setTransform : null;   // resolusi kartu gameplay Master DIKUNCI 360p (kartu kecil maupun diperbesar) agar GPU ringan saat 4 pemain; ubah RW/RH bila perlu
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const qPos = v => clamp(Math.round((v + OFF) * SC), 0, 65535), dPos = u => u / SC - OFF;
 const qAng = a => { a = a % TAU; if (a < 0) a += TAU; return Math.round(a / TAU * 65536) & 65535; }, dAng = u => u / 65536 * TAU;
@@ -84,13 +83,6 @@ const emitter = {
     const self = this, oStep = window.step, oP = window.P;
     window.step = function () { oStep.apply(this, arguments); if (self.active) { try { self.onStep(); } catch (e) { console.error('live:', e); } } };
     window.P = function (o) { oP.apply(this, arguments); if (self.active) self.collect(o); };
-    // pesan "kehilangan nyawa" (toast 🐤 di layar pemain) ikut dikirim ke Master
-    const oLL = window.lifeLost;
-    if (typeof oLL === 'function') window.lifeLost = function () {
-      const r = oLL.apply(this, arguments);
-      if (self.active) { try { const t = document.getElementById('toast'), b = t && t.querySelector('b'), sm = t && t.querySelector('small'); if (b) self.toastQ = { m: b.textContent, s: sm ? sm.textContent : '' }; } catch (e) { } }
-      return r;
-    };
   },
   start(chSt, chEv) {
     this.install(); this.chSt = chSt; this.chEv = chEv;
@@ -130,8 +122,7 @@ const emitter = {
     if (rm.length) e.rm = rm; if (nb.length) e.nb = nb; if (nf.length) e.nf = nf; if (bu.length) e.bu = bu;
     const m = this.meta(), mk = JSON.stringify(m); if (mk !== this.metaKey) { this.metaKey = mk; e.m = m; }
     if (this.txq.length) { e.tx = this.txq; this.txq = []; }
-    if (this.toastQ) { e.ts = this.toastQ; this.toastQ = null; }
-    if (e.rm || e.nb || e.nf || e.bu || e.m || e.tx || e.ts) { e.t = 'e'; e.n = n; try { chEv.send(JSON.stringify(e)); } catch (er) { } }
+    if (e.rm || e.nb || e.nf || e.bu || e.m || e.tx) { e.t = 'e'; e.n = n; try { chEv.send(JSON.stringify(e)); } catch (er) { } }
 
     // jaringan macet: jangan menumpuk antrean (latensi naik) — buang partikel & kirim ulang snapshot penuh begitu lancar
     if (chSt.bufferedAmount > 32768) { this.forceKey = true; this.pend.length = 0; return; }
@@ -162,18 +153,15 @@ const emitter = {
    ===================================================================================================== */
 class Replica {
   constructor(cv) {
-    this.cv = cv; cv.width = RW; cv.height = RH; this.cx = cv.getContext('2d', { alpha: false });
-    // 360p: kanvas kartu 640×360; draw() game bekerja di koordinat 960×540, jadi setTransform-nya dikalikan RW/960 (latar & HUD digambar langsung pada resolusi kartu)
-    this.cx.imageSmoothingQuality = 'high';
-    this.cx.setTransform = function (a, b, c, d, e, f) { return rawST.call(this, a * RS, b * RS, c * RS, d * RS, e * RS, f * RS); };
-    this.hud = document.createElement('canvas'); this.hud.width = Math.round(960 * RS); this.hud.height = Math.round(100 * RS); this.hcx = this.hud.getContext('2d');
+    this.cv = cv; this.cx = cv.getContext('2d', { alpha: false });
+    this.hud = document.createElement('canvas'); this.hud.width = 960; this.hud.height = 100; this.hcx = this.hud.getContext('2d');
     this.hidden = false; this.big = false; this.D = 6; this.off = null; this.has = false; this.lastSeq = -1;
     this.stat = { bytes: 0, pk: 0, frames: 0, ms: 0, lost: 0, exp: 0, starve: 0, calm: 0, out: { fps: 0, kbps: 0, hz: 0, loss: 0, delay: 100, ms: 0 } };
     this.m = { sc: 0, h: 3, sk: 0, cl: 0, sh: 0, qi: 0, q: '', a: 0, w: 0, lv: 0, ng: 0, qs: 0, dn: 0, bq: [], cu: null, cr: 0 };
     this.s = { st: 0, ax: 170, ay: 372, shake: 0, flash: 0 }; this.last = { n: 0, playMs: 0 }; this.lastPopN = -1; this.newN = 0; this.fdone = 0; this.hudKey = '';
     this.clearWorld();
   }
-  clearWorld() { this.toast = null; this.map = new Map(); this.bodies = []; this.parts = []; this.trail = []; this.buf = []; this.evq = []; this.fdone = 0; }
+  clearWorld() { this.map = new Map(); this.bodies = []; this.parts = []; this.trail = []; this.buf = []; this.evq = []; this.fdone = 0; }
   addBody(d, n, kind) {
     const old = this.map.get(d.i); if (old) this.bodies.splice(this.bodies.indexOf(old), 1);
     const b = { id: d.i, k: kind, birth: n, die: Infinity, seen: false, hist: [[n, d.x, d.y, d.a]], position: { x: d.x, y: d.y }, angle: d.a };
@@ -189,7 +177,7 @@ class Replica {
     if (e.rm) for (const id of e.rm) { const b = this.map.get(id); if (b) b.die = e.n; }
     if (e.nb) for (const d of e.nb) this.addBody(d, e.n, 0);
     if (e.nf) for (const d of e.nf) this.addBody(d, e.n, 1);
-    if (e.bu || e.m || e.tx || e.ts) this.evq.push(e);
+    if (e.bu || e.m || e.tx) this.evq.push(e);
   }
   onPacket(buf) {
     const p = decodeSnap(buf); if (!p) return;
@@ -217,7 +205,6 @@ class Replica {
   applyEv(e) {
     if (e.bu) for (const u of e.bu) { const b = this.map.get(u.i); if (b) { if (u.t !== undefined) b.t = u.t; b.mat = u.m; b.dent = u.d; b.frozen = !!u.f; } }
     if (e.m) Object.assign(this.m, e.m);
-    if (e.ts) this.toast = { m: String(e.ts.m || '').slice(0, 120), s: String(e.ts.s || '').slice(0, 60), f: e.n };
     if (e.tx) for (const t of e.tx) this.spawn({ k: 'txt', x: t.x, y: t.y, vx: t.vx, vy: t.vy, g: t.g, l: t.l, c: t.c, tx: t.tx });
   }
   applyPkt(p) {
@@ -257,41 +244,23 @@ class Replica {
       this.sample(b, T); (b.k === 0 ? vItems : vFlock).push(b);
     }
     const m = this.m, s = this.s;
+    const W0 = this.big ? 960 : 640, H0 = this.big ? 540 : 360;
+    if (this.cv.width !== W0) { this.cv.width = W0; this.cv.height = H0; }
     const playMsNow = m.dn ? this.last.playMs : this.last.playMs + Math.min(1000, Math.max(0, (T - this.last.n) * STEP));
     const t0 = performance.now();
-    const svG = g, svHR = HR, sv = [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart];
+    const sv = [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart];
     master.cur = this;
     try {
-      g = this.cx; HR = RS; rawST.call(g, RS, 0, 0, RS, 0, 0);
       items = vItems; flock = vFlock; parts = this.parts; trail = this.trail; birds = m.bq; cur = m.cu ? { type: m.cu, r: m.cr || (B[m.cu] ? B[m.cu].r : 12) } : null;
       aim = { x: s.ax, y: s.ay }; st = STN[s.st]; shake = s.shake; flashA = s.flash; paused = false; night = !!m.ng; wrongQ = m.w; ans = m.a; frame = Tf; SQ = [1, 1];
       hearts = m.h; score = m.sc; qIdx = m.qi; qText = m.q; lvl = m.lv; streak = m.sk; cleared = m.cl; shots = m.sh; playMs = playMsNow; qStart = m.qs;
       draw(1);
-      if (this.toast) this.drawToast(Tf);
+      this.cx.drawImage(cv, 0, 0, W0, H0);
     } finally {
-      rawST.call(this.cx, 1, 0, 0, 1, 0, 0); g = svG; HR = svHR;
       [items, flock, parts, trail, birds, cur, aim, st, shake, flashA, paused, night, wrongQ, ans, frame, SQ, hearts, score, qIdx, qText, lvl, streak, cleared, shots, playMs, qStart] = sv;
       master.cur = null;
     }
     S.frames++; S.ms += performance.now() - t0;
-  }
-  drawToast(Tf) {   // salinan toast CSS #toast (animasi 3,6 dtk = 216 langkah) digambar di kartu Master
-    const T = this.toast, p = (Tf - T.f) / 216;
-    if (p < 0) return; if (p >= 1) { this.toast = null; return; }
-    const a = p < .08 ? p / .08 : p > .88 ? (1 - p) / .12 : 1, sc = p < .08 ? .8 + .27 * p / .08 : p < .14 ? 1.07 - .07 * (p - .08) / .06 : 1, dy = p < .08 ? -14 * (1 - p / .08) : 0;
-    const x = this.cx; x.save(); rawST.call(x, RS, 0, 0, RS, 0, 0); x.globalAlpha = Math.max(0, Math.min(1, a));
-    x.font = '700 22px system-ui'; const mw = Math.min(x.measureText(T.m).width, 560);
-    x.font = '15px system-ui'; const sw = x.measureText(T.s).width;
-    const tw = Math.max(mw, sw), w = tw + 56 + 44, h = 76, cx0 = 480, cy0 = 540 * .24 + h / 2 + dy;
-    x.translate(cx0, cy0); x.scale(sc, sc);
-    const rr = (X, Y, W, H, R) => { x.beginPath(); if (x.roundRect) x.roundRect(X, Y, W, H, R); else x.rect(X, Y, W, H); };
-    x.fillStyle = 'rgba(0,0,0,.27)'; rr(-w / 2, -h / 2 + 5, w, h, 24); x.fill();
-    x.fillStyle = '#fff'; rr(-w / 2, -h / 2, w, h, 24); x.fill(); x.lineWidth = 4; x.strokeStyle = '#ff6b9d'; x.stroke();
-    x.textBaseline = 'middle'; x.textAlign = 'left';
-    x.font = '38px system-ui'; x.fillText('🐤', -w / 2 + 20, 2);
-    x.fillStyle = '#2a2118'; x.font = '700 22px system-ui'; x.fillText(T.m, -w / 2 + 20 + 56, -12, 560);
-    x.globalAlpha *= .8; x.font = '15px system-ui'; x.fillText(T.s, -w / 2 + 20 + 56, 16);
-    x.restore(); rawST.call(x, RS, 0, 0, RS, 0, 0);
   }
   tick() {   // dipanggil tiap 1 dtk: ringkasan statistik untuk label di kartu
     const S = this.stat, o = S.out;
@@ -317,8 +286,8 @@ const master = {
       window.drawHUD = function () {
         const R = master.cur; if (!R) return oHUD();
         const k = (playMs / 1000 | 0) + '|' + score + '|' + hearts + '|' + lvl + '|' + streak + '|' + cleared + '|' + shots + '|' + qText + '|' + qIdx + '|' + night + '|' + (st === 'fly');
-        if (R.hudKey !== k) { R.hudKey = k; hudKey = ''; oHUD(); R.hcx.clearRect(0, 0, R.hud.width, R.hud.height); R.hcx.drawImage(hudC, 0, 0, R.hud.width, R.hud.height); }
-        else g.drawImage(R.hud, 0, 0, 960, 100);
+        if (R.hudKey !== k) { R.hudKey = k; hudKey = ''; oHUD(); R.hcx.clearRect(0, 0, 960, 100); R.hcx.drawImage(hudC, 0, 0); }
+        else g.drawImage(R.hud, 0, 0);
       };
     }
     const loop = now => {
