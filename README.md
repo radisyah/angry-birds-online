@@ -20,7 +20,10 @@ Room Master ────┼─ polling ─ /api/room ───┤
   plus skor/nyawa/progres di tiap kartu; klik video untuk memperbesar satu pemain. Master juga bisa *Hentikan permainan*.
 - **Cara siaran video:** WebRTC peer-to-peer (latensi ±0,1–0,3 dtk, buffer jitter penerima kecil ±150 ms agar 30 fps rata). Server (Vercel) hanya menukar pesan sinyal
   (offer/answer), video **tidak** lewat server. Jaringan lemah → resolusi gambar yang turun bertahap (640×360 → 160×90, diatur otomatis oleh pemain tiap 1 dtk), bukan FPS (`contentHint = "motion"` + `maintain-framerate`; frame diambil tiap 33,3 ms dengan `requestFrame()`).
-  Penyambungan dipercepat: Master & pemain mengecek sinyal tiap ±0,6–0,7 dtk sampai video tersambung (biasanya < 3 dtk), lalu kembali normal.
+  **Trickle ICE:** offer/answer dikirim langsung tanpa menunggu pengumpulan kandidat selesai; kandidat ICE menyusul bertahap lewat `signal` (`kind: "cand"`, daftar kumulatif, per nomor tautan `n`).
+  Master & pemain mengecek sinyal tiap ±0,6–0,7 dtk sampai video tersambung (biasanya ±1,7 dtk; sebelumnya ±4,9 dtk), lalu kembali normal.
+  **Sambung ulang otomatis:** tautan `failed` langsung dibuat ulang; `disconnected` diberi tenggang 3 dtk (sering pulih sendiri); tautan yang belum tersambung dicoba ulang
+  tiap 4,5 dtk dan makin sabar tiap percobaan (maks. 8 percobaan). Tautan yang pernah tersambung lalu putus disambung ulang tanpa batas percobaan selama pemain masih bermain.
 - **Agar Master bisa melihat dari SEMUA jaringan (4G/CGNAT, wifi sekolah/kantor, NAT ketat) wajib mengaktifkan server TURN (relay).**
   STUN saja hanya menembus sebagian jaringan. Pilih salah satu dan isi di Vercel → Settings → Environment Variables, lalu Redeploy:
 

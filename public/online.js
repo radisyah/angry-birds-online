@@ -126,7 +126,7 @@ async function pollOnce() {
   if (!ON) return;
   try {
     const qs = { code: ON.code, token: ON.token, v: V ? V.v : 0 };
-    if (V && V.side === 'master' && V.status === 'playing') { qs.g = V.gameNo; qs.an = Object.keys(links).map(id => id + ':' + links[id].an).join(','); }
+    if (V && V.side === 'master' && V.status === 'playing') { qs.g = V.gameNo; qs.an = Object.keys(links).map(id => id + ':' + links[id].an).join(','); qs.lc = Object.keys(links).map(id => id + ':' + links[id].n + ':' + links[id].cn).join(','); }
     const r = await fetch(API + '?' + new URLSearchParams(qs), { cache: 'no-store' });
     const j = await r.json();
     if (!j.ok) { if (r.status === 404 || r.status === 401) return sessionLost(j.error); throw new Error(j.error); }
@@ -146,7 +146,7 @@ function applyView(v) {
   if (playing && v.status === 'lobby') { location.reload(); return; }
   if (v.side === 'player' && v.status === 'playing' && !playing && v.seed != null) startPlayer(v.seed);
   if (v.status === 'finished') { stopStats(); stopBroadcast(); if (playing) freezeGame(); closeAllLinks(); }
-  if (v.side === 'master' && v.status === 'playing' && v.sigs) Object.keys(v.sigs).forEach(id => gotAnswer(id, v.sigs[id]));
+  if (v.side === 'master' && v.status === 'playing' && v.sigs) Object.keys(v.sigs).forEach(id => gotSignal(id, v.sigs[id]));
   render();
 }
 
@@ -238,7 +238,7 @@ const STUN_ONLY = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:
 const VID = { w: 640, h: 360, fps: 30, kbps: 800, jitterMs: 150 };   // batas siaran: 360p, 30 fps; jitterMs = buffer kecil di Master agar 30 fps stabil
 const SCALES = [1, 1.5, 2, 3, 4];   // 640×360 → 427×240 → 320×180 → 213×120 → 160×90 (urutan resolusi yang dikorbankan, FPS tetap 30)
 let adaptLv = 0, adaptT = 0;
-const LINK_RETRY_MS = 9000, LINK_MAX_TRIES = 8;
+const LINK_RETRY_MS = 4500, LINK_MAX_TRIES = 8, LINK_GRACE_MS = 3000;   // tautan yang pernah tersambung & putus: sambung ulang tanpa batas percobaan
 let icePromise = null;
 /* STUN + TURN dari server (TURN = relay agar video sampai di semua jaringan). Gagal → STUN saja. */
 function getIce() {
@@ -255,17 +255,21 @@ function getIce() {
 }
 let iceRelay = true;
 let links = {};          // id -> { pc, n, an (jawaban terakhir yang diproses), t (mulai), ok, stream }
-function waitIce(pc, ms, needRelay) {
-  return new Promise(res => {
-    if (pc.iceGatheringState === 'complete') return res();
-    let rt = 0;
-    const done = () => { clearTimeout(t); clearTimeout(rt); pc.removeEventListener('icegatheringstatechange', ch); pc.removeEventListener('icecandidate', cd); res(); };
-    const ch = () => { if (pc.iceGatheringState === 'complete') done(); };
-    // ada kandidat relay (TURN) → cukup tunggu sebentar agar kandidat lain ikut, tidak perlu menunggu semua server
-    const cd = ev => { if (needRelay && ev.candidate && ev.candidate.type === 'relay' && !rt) rt = setTimeout(done, 350); };
-    const t = setTimeout(done, ms); pc.addEventListener('icegatheringstatechange', ch); pc.addEventListener('icecandidate', cd);
-  });
+/* Trickle ICE: kandidat dikirim begitu ditemukan (tanpa menunggu semua terkumpul), sebagai daftar kumulatif yang diganti utuh.
+   Satu pengiriman berjalan sekaligus agar urutan tidak terbalik; kandidat baru yang muncul saat mengirim ikut dikirim di putaran berikut. */
+function makeTrickle(list, send) {
+  let t = 0, busy = false, again = false;
+  const run = async () => {
+    if (busy) { again = true; return; }
+    busy = true;
+    try { do { again = false; await send(list.slice()); } while (again); }
+    catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
+    busy = false;
+  };
+  return () => { clearTimeout(t); t = setTimeout(run, 100); };
 }
+const candStr = c => JSON.stringify(c.toJSON ? c.toJSON() : c);
+const MAX_CAND = 40;
 /* Tekan latensi sisi penerima (Master): buffer jitter sekecil mungkin */
 function lowLatency(recv) {
   // buffer 0 membuat setiap jitter jaringan langsung jadi patah-patah (FPS turun); buffer kecil ±150 ms menjaga 30 fps tetap rata
@@ -280,22 +284,42 @@ async function openLink(id) {
   if (prev) { try { prev.pc.close(); } catch (e) { } }
   const ice = await getIce(); iceRelay = ice.relay;
   if (!V || V.gameNo !== gNo) return;
-  const pc = new RTCPeerConnection(ice), l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true };
+  const pc = new RTCPeerConnection(ice), lc = [];
+  const l = links[id] = { pc, n, an: prev ? prev.an : 0, t: Date.now(), ok: false, busy: true, everOk: !!(prev && prev.everOk), dropAt: 0,
+    tries: prev && !prev.everOk ? prev.tries + 1 : 1, cn: 0, lc, pend: [], rd: false };
+  const push = makeTrickle(lc, list => links[id] === l ? call('signal', { kind: 'cand', to: id, n, c: list }) : Promise.resolve());
   pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.onicecandidate = ev => { if (ev.candidate && lc.length < MAX_CAND) { lc.push(candStr(ev.candidate)); push(); } };
   pc.ontrack = ev => { lowLatency(ev.receiver); const vid = document.querySelector('#vd' + id); if (vid) { vid.srcObject = ev.streams[0] || new MediaStream([ev.track]); vid.play().catch(() => { }); } };
-  pc.onconnectionstatechange = () => { l.ok = pc.connectionState === 'connected'; updateLinkUI(id); };
+  pc.onconnectionstatechange = () => {
+    if (links[id] !== l) return;   // tautan lama yang sudah diganti
+    const st = pc.connectionState;
+    l.ok = st === 'connected';
+    if (l.ok) { l.everOk = true; l.dropAt = 0; }
+    else if (st === 'disconnected' && !l.dropAt) l.dropAt = Date.now();
+    updateLinkUI(id);
+    if ((st === 'failed' || st === 'closed') && V && V.status === 'playing') maintainLinks(V);   // gagal: sambung ulang segera, tanpa menunggu polling
+  };
   try {
-    await pc.setLocalDescription(await pc.createOffer());
-    await waitIce(pc, 4000, ice.relay);
+    await pc.setLocalDescription(await pc.createOffer());   // offer langsung dikirim; kandidat menyusul (trickle)
     if (links[id] !== l || !V || V.gameNo !== gNo) return;
     await call('signal', { kind: 'offer', to: id, n, sdp: pc.localDescription.sdp });
+    push();
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
   l.busy = false;
 }
-async function gotAnswer(id, a) {
-  const l = links[id]; if (!l || !a || a.n !== l.n || l.an === a.n) return;
-  l.an = a.n;
-  try { await l.pc.setRemoteDescription({ type: 'answer', sdp: a.sdp }); } catch (e) { l.an = 0; }
+function flushPend(l) {
+  if (!l.rd) return;
+  while (l.pend.length) { let c; try { c = JSON.parse(l.pend.shift()); } catch (e) { continue; } l.pc.addIceCandidate(c).catch(() => { }); }
+}
+/* Jawaban (answer) dan kandidat ICE pemain: e = { a?: {n, sdp}, c?: {n, from, c: [...]} } */
+function gotSignal(id, e) {
+  const l = links[id]; if (!l || !e) return;
+  if (e.a && e.a.n === l.n && l.an !== e.a.n) {
+    l.an = e.a.n;
+    l.pc.setRemoteDescription({ type: 'answer', sdp: e.a.sdp }).then(() => { l.rd = true; flushPend(l); }).catch(() => { l.an = 0; });
+  }
+  if (e.c && e.c.n === l.n && e.c.from === l.cn) { l.cn += e.c.c.length; l.pend.push(...e.c.c); flushPend(l); }
 }
 /* FPS video yang benar-benar tampil di layar Master (dihitung per frame lewat requestVideoFrameCallback; cadangan: getStats) */
 let fpsT = 0, fpsN = {}, fpsLast = {};
@@ -329,7 +353,7 @@ function updateLinkUI(id) {
   const vs = document.querySelector('#vs' + id), l = links[id]; if (!vs) return;
   const vid = document.querySelector('#vd' + id), ok = (l && l.ok) || (!l && vid && vid.srcObject);   // tanpa tautan tapi ada gambar terakhir: tetap tampil
   vs.className = 'vs' + (ok ? ' ok' : '');
-  if (!ok) vs.textContent = !l ? 'Video tidak tersedia' : (l.n > 2 ? (iceRelay ? '📡 Video belum tersambung, mencoba lagi… Skor tetap tampil.' : '📡 Video tidak bisa tersambung: server TURN belum diatur (lihat README). Skor tetap tampil.') : '📡 Menyambungkan video…');
+  if (!ok) vs.textContent = !l ? 'Video tidak tersedia' : (l.tries > 2 && !l.everOk ? (iceRelay ? '📡 Video belum tersambung, mencoba lagi… Skor tetap tampil.' : '📡 Video tidak bisa tersambung: server TURN belum diatur (lihat README). Skor tetap tampil.') : (l.everOk ? '📡 Video terputus, menyambung ulang…' : '📡 Menyambungkan video…'));
 }
 function maintainLinks(v) {
   v.players.forEach(p => {
@@ -337,9 +361,11 @@ function maintainLinks(v) {
     const l = links[p.id];
     if (!active) { if (l && (p.done || p.left)) { closeLink(p.id); updateLinkUI(p.id); } return; }
     if (!l) { openLink(p.id); return; }
-    const bad = ['failed', 'disconnected', 'closed'].includes(l.pc.connectionState);
-    if (!l.ok && !l.busy && (bad || Date.now() - l.t > LINK_RETRY_MS) && l.n < LINK_MAX_TRIES) { openLink(p.id); }
-    else if (l.ok && bad) { l.ok = false; openLink(p.id); }
+    const st = l.pc.connectionState, now = Date.now();
+    if (st === 'connected') { l.dropAt = 0; return; }
+    const bad = st === 'failed' || st === 'closed' || (st === 'disconnected' && l.dropAt && now - l.dropAt > LINK_GRACE_MS);   // 'disconnected' sering pulih sendiri: beri tenggang
+    const stuck = !l.ok && st !== 'disconnected' && now - l.t > Math.min(12000, LINK_RETRY_MS + 2500 * (l.tries - 1));   // makin lama makin sabar (jaringan lambat / relay TURN)
+    if (!l.busy && (bad || stuck) && (l.everOk || l.tries < LINK_MAX_TRIES)) openLink(p.id);
   });
 }
 
@@ -418,7 +444,7 @@ function startPlayer(seed) {
   };
   players = [V.myName]; results = []; pi = 0; started = true;
   beginTurn(); closeMenu();
-  sendStats(); statT = setInterval(sendStats, 2000); fastOfferCheck(); getIce();
+  sendStats(); statT = setInterval(sendStats, 2000); boostFast(); getIce();
 }
 const liveStats = () => {
   const r = results[0];
@@ -428,9 +454,10 @@ const liveStats = () => {
 async function sendStats() {
   if (!ON || overSent || !playing) return;
   try {
-    const j = await call('stats', { stats: liveStats(), sigN: sendN });
+    const j = await call('stats', { stats: liveStats(), sigN: sendN, cN: candN });
     failCount = 0;
     if (j.offer && j.offer.n !== sendN) answerOffer(j.offer);
+    if (j.oc) gotMasterCands(j.oc);
     if (V && (j.status !== 'playing' || j.gameNo !== V.gameNo)) pollOnce();
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
 }
@@ -450,7 +477,7 @@ async function sendOver() {
 function stopStats() { clearInterval(statT); statT = 0; }
 
 /* ---------- sisi pemain: siarkan canvas game ke Room Master (WebRTC, 360p · 30 fps) ---------- */
-let sendPC = null, sendN = 0, sendBusy = false, feed = null, fastT = 0;
+let sendPC = null, sendN = 0, sendBusy = false, feed = null, fastT = 0, fastBudget = 0, candN = 0, remoteRd = false, remotePend = [];
 /* Kanvas game 960×540 diperkecil ke 640×360 (360p) dan diambil 30 fps: ringan di HP pemain & tidak membebani Master. */
 function makeFeed() {
   if (feed) return feed;
@@ -518,31 +545,54 @@ function stopBroadcast() {
   if (feed) { feed.stop(); feed = null; }
   clearInterval(fastT); fastT = 0; clearInterval(adaptT); adaptT = 0;
 }
+function flushRemote() {
+  if (!sendPC || !remoteRd) return;
+  while (remotePend.length) { let c; try { c = JSON.parse(remotePend.shift()); } catch (e) { continue; } sendPC.addIceCandidate(c).catch(() => { }); }
+}
+/* Kandidat ICE Master (trickle) dari balasan statistik: oc = { n, from, c: [...] } */
+function gotMasterCands(oc) {
+  if (!oc || oc.n !== sendN || oc.from !== candN) return;
+  candN += oc.c.length; remotePend.push(...oc.c); flushRemote();
+}
 async function answerOffer(offer) {
   if (sendBusy || typeof RTCPeerConnection === 'undefined') return;
-  sendBusy = true;
+  sendBusy = true; sendN = offer.n; candN = 0; remoteRd = false; remotePend = [];
+  boostFast();
   try {
     const ice = await getIce();
     if (sendPC) { try { sendPC.close(); } catch (e) { } sendPC = null; }
-    const stream = makeFeed().stream;
+    const stream = makeFeed().stream, n = offer.n, lc = [];
     const pc = sendPC = new RTCPeerConnection(ice);
+    const push = makeTrickle(lc, list => sendPC === pc ? call('signal', { kind: 'cand', n, c: list }) : Promise.resolve());
+    pc.onicecandidate = ev => { if (ev.candidate && lc.length < MAX_CAND) { lc.push(candStr(ev.candidate)); push(); } };
+    pc.addEventListener('connectionstatechange', () => {
+      if (sendPC !== pc) return;
+      if (pc.connectionState === 'connected') { tuneSender(pc); startAdapt(pc); }
+      else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) boostFast();   // cepat cek penawaran baru dari Master
+    });
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+    if (sendPC !== pc) return;
+    remoteRd = true; flushRemote();
     tuneSender(pc);
     await pc.setLocalDescription(await pc.createAnswer());
     tuneSender(pc);   // diulang setelah negosiasi: sebelumnya setParameters bisa gagal diam-diam karena encodings belum ada
-    pc.addEventListener('connectionstatechange', () => { if (pc.connectionState === 'connected') { tuneSender(pc); startAdapt(pc); } });
-    await waitIce(pc, 4000, ice.relay);
     if (sendPC !== pc) return;
-    await call('signal', { kind: 'answer', n: offer.n, sdp: pc.localDescription.sdp });
-    sendN = offer.n;
+    await call('signal', { kind: 'answer', n, sdp: pc.localDescription.sdp });   // answer langsung dikirim; kandidat menyusul (trickle)
+    push();
   } catch (e) { if (e.status === 401 || e.status === 404) handleErr(e); }
   finally { sendBusy = false; }
 }
-/* Sebelum video tersambung, pemain mengecek penawaran Master lebih sering (0,7 dtk) supaya gambar muncul cepat. */
-function fastOfferCheck() {
-  clearInterval(fastT); let n = 0;
-  fastT = setInterval(() => { if (!playing || overSent || sendN > 0 || ++n > 40) { clearInterval(fastT); fastT = 0; return; } sendStats(); }, 700);
+/* Selama siaran belum tersambung (atau baru putus), pemain mengecek penawaran Master tiap 0,7 dtk (±28 dtk) supaya gambar muncul / pulih cepat.
+   Setelah tersambung tidak ada pengecekan tambahan; tanpa Room Master berhenti sendiri sehingga tidak membebani Redis. */
+function boostFast() {
+  fastBudget = 40;
+  if (fastT) return;
+  fastT = setInterval(() => {
+    if (!playing || overSent) { clearInterval(fastT); fastT = 0; return; }
+    if (sendPC && sendPC.connectionState === 'connected') return;
+    if (fastBudget-- > 0) sendStats(); else { clearInterval(fastT); fastT = 0; }
+  }, 700);
 }
 
 /* ---------- awal ---------- */

@@ -20,7 +20,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rid = n => crypto.randomBytes(n).toString('hex');
 const cleanName = s => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 12);
 const roomKey = c => 'room:' + c, presKey = (c, id) => 'pres:' + c + ':' + id, statKey = (c, id) => 'stat:' + c + ':' + id;
-const sigKey = (c, g, id, k) => 'sig:' + c + ':' + g + ':' + id + ':' + k;   // k: 'o' (offer Master) / 'a' (answer pemain)
+const sigKey = (c, g, id, k) => 'sig:' + c + ':' + g + ':' + id + ':' + k;   // k: 'o' offer Master, 'a' answer pemain, 'oc' kandidat ICE Master, 'ac' kandidat ICE pemain
+const MAX_CAND = 40, MAX_CAND_LEN = 600;
 const parse = s => { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
 
 /* ---------- logika room ---------- */
@@ -251,10 +252,16 @@ async function actStats(b) {
     const live = Object.assign(core.cleanLive(b.stats), { t: now, g: room.gameNo });
     const r = await store.pipeline([
       ['SET', statKey(code, p.id), JSON.stringify(live), 'EX', STAT_TTL],
-      ['GET', sigKey(code, room.gameNo, p.id, 'o')]
+      ['GET', sigKey(code, room.gameNo, p.id, 'o')],
+      ['GET', sigKey(code, room.gameNo, p.id, 'oc')]
     ]);
-    const offer = parse(r[1]);   // penawaran siaran dari Room Master (dikirim hanya bila belum dikenal pemain)
-    if (offer && offer.n !== int0(b.sigN)) out.offer = offer;
+    const offer = parse(r[1]), oc = parse(r[2]), sigN = int0(b.sigN);   // penawaran siaran dari Room Master (dikirim hanya bila belum dikenal pemain)
+    if (offer && offer.n !== sigN) out.offer = offer;
+    // kandidat ICE Master (trickle): hanya yang belum diterapkan pemain (cN) dan hanya untuk penawaran yang sama
+    if (offer && oc && oc.n === offer.n && Array.isArray(oc.c)) {
+      const from = offer.n === sigN ? int0(b.cN) : 0;
+      if (oc.c.length > from) out.oc = { n: oc.n, from, c: oc.c.slice(from) };
+    }
   }
   return out;
 }
@@ -265,7 +272,19 @@ async function actSignal(b) {
   if (!room) throw fail(404, 'Ruangan tidak ditemukan atau sudah kedaluwarsa.');
   const seat = seatOf(room, b.token);
   if (room.status !== 'playing') throw fail(409, 'Permainan tidak sedang berjalan.');
-  const sdp = String(b.sdp || ''), n = int0(b.n);
+  const n = int0(b.n);
+  if (b.kind === 'cand') {   // kandidat ICE (trickle): daftar kumulatif, menggantikan daftar sebelumnya
+    let id2, kind2;
+    if (seat === 'master') {
+      id2 = String(b.to); if (!room.players.some(p => p.id === id2 && !p.done && !p.left)) throw fail(404, 'Pemain tidak ditemukan.');
+      kind2 = 'oc';
+    } else { id2 = seat; kind2 = 'ac'; }
+    const c = Array.isArray(b.c) ? b.c : [];
+    if (c.length > MAX_CAND || c.some(x => typeof x !== 'string' || !x || x.length > MAX_CAND_LEN)) throw fail(400, 'Kandidat ICE tidak valid.');
+    await store.cmd(['SET', sigKey(code, room.gameNo, id2, kind2), JSON.stringify({ n, c }), 'EX', SIG_TTL]);
+    return {};
+  }
+  const sdp = String(b.sdp || '');
   if (!sdp || sdp.length > MAX_SDP) throw fail(400, 'SDP tidak valid.');
   let id, kind;
   if (b.kind === 'offer') {
@@ -299,7 +318,7 @@ async function actState(q) {
   ];
   // Room Master yang sedang memantau juga mengambil jawaban siaran (answer) dari pemain; gameNo dari param `g`
   const gNo = int0(q.g), wantSigs = gNo > 0;
-  if (wantSigs) cmds.push(['MGET'].concat(SEATS.map(i => sigKey(code, gNo, i, 'a'))));
+  if (wantSigs) { cmds.push(['MGET'].concat(SEATS.map(i => sigKey(code, gNo, i, 'a')))); cmds.push(['MGET'].concat(SEATS.map(i => sigKey(code, gNo, i, 'ac')))); }
   const first = await store.pipeline(cmds);
   if (!first[0]) throw fail(404, 'Ruangan tidak ditemukan atau sudah kedaluwarsa.');
   let room = JSON.parse(first[0]);
@@ -317,7 +336,16 @@ async function actState(q) {
   if (seat === 'master' && room.status === 'playing' && wantSigs && room.gameNo === gNo) {
     // `an` = "id:n,id:n" jawaban yang sudah diproses Master (tidak dikirim ulang)
     const known = {}; String(q.an || '').split(',').forEach(x => { const [i, n] = x.split(':'); if (i) known[i] = Number(n); });
-    const sigs = {}; SEATS.forEach((id, i) => { const a = parse(first[3][i]); if (a && known[id] !== a.n) sigs[id] = a; });
+    // `lc` = "id:n:jumlah" kandidat ICE pemain (untuk tautan Master nomor n) yang sudah diterapkan Master
+    const have = {}; String(q.lc || '').split(',').forEach(x => { const [i, n, k] = x.split(':'); if (i) have[i] = { n: Number(n), k: Number(k) || 0 }; });
+    const sigs = {};
+    SEATS.forEach((id, i) => {
+      const a = parse(first[3][i]), ac = parse(first[4][i]), e = {};
+      if (a && known[id] !== a.n) e.a = a;
+      const h = have[id];
+      if (h && ac && ac.n === h.n && Array.isArray(ac.c) && ac.c.length > h.k) e.c = { n: ac.n, from: h.k, c: ac.c.slice(h.k) };
+      if (e.a || e.c) sigs[id] = e;
+    });
     if (Object.keys(sigs).length) view.sigs = sigs;
   }
   return { view };
