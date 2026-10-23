@@ -47,6 +47,12 @@ style.textContent = `
 .tl .vs.ok{display:none}
 .tl .fps{position:absolute;right:8px;top:6px;background:#000a;border-radius:8px;padding:2px 9px;font:800 14px ui-monospace,Menlo,monospace;color:#8f8;pointer-events:none}
 .tl .fps.mid{color:#ffd54f}.tl .fps.low{color:#ff8a80}.tl .fps.none{color:#aaa}
+.tl .nt{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 16px);display:flex;flex-direction:column;gap:4px;pointer-events:none;z-index:3}
+.tl .chp{align-self:flex-start;padding:3px 11px;border-radius:999px;font:800 14px system-ui,sans-serif;color:#fff;box-shadow:0 2px 6px #0007;animation:chp 2.4s ease-out forwards}
+.tl .chp.lf{background:#d32f2f}.tl .chp.sk{background:#ef6c00}
+@keyframes chp{0%{opacity:0;transform:translateY(8px)}8%{opacity:1;transform:none}80%{opacity:1}100%{opacity:0}}
+.tl .fo{position:absolute;inset:0;z-index:4;display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:#000;color:#fff;text-align:center;pointer-events:none}
+.tl .fo.on{display:flex}.tl .fo b{font-size:clamp(22px,4vw,44px);letter-spacing:.12em}.tl .fo .fs{font-size:clamp(18px,3vw,34px);font-weight:900;color:#ffd54f}.tl .fo small{font-size:14px;color:#cfd8ff}
 .tl .sc{position:absolute;left:8px;top:6px;background:#000a;border-radius:8px;padding:2px 10px;font-size:22px;font-weight:900;color:#ffd54f;pointer-events:none}
 .tl .pb{height:6px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
 .tl .tb{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:#cfe;flex-wrap:wrap}
@@ -301,11 +307,32 @@ function startStats(players) {
     for (const p of players) {
       const el = $$('fp' + p.id), r = reps[p.id]; if (!el || !r) continue;
       const o = r.tick(), shown = !r.hidden;
+      if (r.fin) { el.className = 'fps none'; el.textContent = '⏹ selesai'; continue; }
       el.className = 'fps ' + (!r.has ? 'none' : !shown ? 'none' : o.fps >= 50 ? '' : o.fps >= 25 ? 'mid' : 'low');
       el.textContent = !r.has ? '— FPS' : (shown ? o.fps : '⏸') + ' FPS · ' + o.kbps + ' kbps' + (Live.master.lite && shown ? ' · hemat' : '');
       el.title = 'Gambar ' + o.fps + ' FPS (digambar ulang di perangkat ini, bukan video) · data ' + o.hz + ' paket/dtk · ' + o.kbps + ' kbps · paket hilang ' + o.loss + '% · buffer ' + o.delay + ' ms · waktu gambar ' + o.ms + ' ms/frame' + (Live.master.lite ? ' · MODE HEMAT: perangkat Master tidak cukup cepat menggambar semua kartu 60 FPS (tutup tab lain, perbesar satu kartu, atau pakai laptop yang lebih kuat)' : '');
     }
   }, 1000);
+}
+/* Notifikasi chip di kartu pemain: nyawa berkurang & skill burung (datang dari kejadian siaran, sinkron dengan gambar) */
+const SKILL_TXT = { chuck: 'boost 2× & tembus balok', bomb: 'ledakan area luas', blues: 'pecah jadi 3 burung', matilda: 'jatuhkan telur peledak', hal: 'melambung', bubbles: 'menggembung & dorong balok', silver: 'menukik tajam', stella: 'sedot & banting blok', ice: 'bekukan blok sekitar' };
+function noteChip(id, kind, v) {
+  const box = $$('nt' + id); if (!box) return;
+  const d = document.createElement('div');
+  if (kind === 'life') { d.className = 'chp lf'; d.textContent = '💔 Nyawa −1 · sisa ' + Math.max(0, v); }
+  else { const nm = (typeof B !== 'undefined' && B[v] && B[v].n) || v; d.className = 'chp sk'; d.textContent = (v === 'bubbles' ? '🫧 ' : '⚡ ') + 'Skill ' + nm + ': ' + (SKILL_TXT[v] || 'aktif'); }
+  box.appendChild(d); while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => d.remove(), 2500);
+}
+/* Pemain selesai / kalah / keluar: layar hitam bertuliskan SELESAI + skor (kartu berhenti digambar → hemat CPU) */
+function updateFinished(p, s) {
+  const fo = $$('fo' + p.id), r = reps[p.id]; if (!fo) return;
+  const fin = !!(p.done || p.left); if (r) r.fin = fin;
+  if (!fin) { fo.classList.remove('on'); fo.dataset.k = ''; return; }
+  const live = r && r.has, sc = Math.max(s.score || 0, live ? r.m.sc || 0 : 0), hh = live ? r.m.h : (s.hearts == null ? 3 : s.hearts);
+  const sub = p.left ? '🚪 Keluar dari permainan' : hh <= 0 ? '💔 Kalah · nyawa habis' : (s.q || 0) >= TOTAL_Q ? '🏆 Semua soal selesai' : '⏹ Permainan dihentikan';
+  const k = sc + '|' + sub; if (fo.dataset.k === k) return; fo.dataset.k = k;
+  fo.innerHTML = '<b>SELESAI</b><span class="fs">⭐ ' + sc + '</span><small>' + sub + '</small>'; fo.classList.add('on');
 }
 function updateLinkUI(id) {
   const vs = document.querySelector('#vs' + id), l = links[id], r = reps[id]; if (!vs) return;
@@ -332,11 +359,11 @@ function showMasterGrid() {
     ol.className = 'full'; shownKey = 'grid' + v.gameNo; if (window.armFS) window.armFS();
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
-      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="640" height="360"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="640" height="360"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div><div class="nt" id="nt${p.id}"></div><div class="fo" id="fo${p.id}"></div></div>
       <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
       <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };
-    v.players.forEach(p => { reps[p.id] = new Live.Replica($$('vd' + p.id)); });
+    v.players.forEach(p => { const r = reps[p.id] = new Live.Replica($$('vd' + p.id)); r.onNote = (k, x) => noteChip(p.id, k, x); });
     Live.master.start(reps); startStats(v.players);
     v.players.forEach(p => { $$('vw' + p.id).onclick = () => { const mg = $$('mg'), t = $$('tl' + p.id), on = !t.classList.contains('zm'); mg.querySelectorAll('.tl').forEach(x => x.classList.remove('zm')); mg.classList.toggle('focus', on); if (on) t.classList.add('zm'); v.players.forEach(q => { const r = reps[q.id]; if (r) { r.hidden = on && q.id !== p.id; r.big = on && q.id === p.id; } }); }; });
   }
@@ -354,6 +381,7 @@ function showMasterGrid() {
     $$('tx' + p.id).textContent = 'Soal ' + Math.min(TOTAL_Q, q + (p.done ? 0 : 1)) + '/' + TOTAL_Q + ' · 🔥' + (s.streak || 0) + ' · ✅' + (s.ok || 0);
     $$('bd' + p.id).textContent = badge;
     updateLinkUI(p.id);
+    updateFinished(p, s);
   });
   maintainLinks(v);
 }

@@ -7,7 +7,8 @@
     "dev": "node dev-server.js",
     "test": "node test/api.test.js && node test/redis-rest.test.js && node test/live.test.js",
     "test:e2e": "python3 test/e2e.py",
-    "test:smooth": "python3 test/live-smooth.py"
+    "test:smooth": "python3 test/live-smooth.py",
+    "test:notify": "python3 test/master-notify.py"
   },
   "engines": {
     "node": ">=20"

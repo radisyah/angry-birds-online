@@ -85,7 +85,7 @@ table.sb{width:100%;border-collapse:collapse}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 <script>
 const {Engine,Bodies,Composite,Body,Events,Vector}=Matter;
-const cv=document.getElementById('c');let g=cv.getContext('2d',{alpha:false});   // g = let: dipakai sementara untuk membuat sprite burung
+const cv=document.getElementById('c');let g=cv.getContext('2d');   // g = let: dipakai sementara untuk membuat sprite burung
 const W=960,H=540,GY=470,SX=170,SY=372,MAXD=100,PW=0.16,GS=0.2778,DRAG=.9997,K=6,Q=5,TOTAL=15;
 const STEP=1000/60,mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c},BGS=[null,null],hudC=mk(W,100),hg=hudC.getContext('2d');let hudKey='',last=0,acc=0;
 // 9 burung

@@ -77,16 +77,22 @@ if (typeof window === 'undefined') { if (typeof module !== 'undefined') module.e
    ===================================================================================================== */
 const r2 = v => Math.round(v * 100) / 100;
 const emitter = {
-  active: false, hooked: false, chSt: null, chEv: null, known: new Map(), idc: 0, seq: 0, pend: [], txq: [], metaKey: '', scKey: '', forceKey: true, sentBytes: 0,
+  active: false, hooked: false, chSt: null, chEv: null, known: new Map(), idc: 0, seq: 0, pend: [], txq: [], metaKey: '', scKey: '', forceKey: true, sentBytes: 0, skq: [],
   install() {
     if (this.hooked) return; this.hooked = true;
-    const self = this, oStep = window.step, oP = window.P;
+    const self = this, oStep = window.step, oP = window.P, oSk = window.skill;
     window.step = function () { oStep.apply(this, arguments); if (self.active) { try { self.onStep(); } catch (e) { console.error('live:', e); } } };
     window.P = function (o) { oP.apply(this, arguments); if (self.active) self.collect(o); };
+    // skill burung dipakai → kirim jenisnya ke Master (untuk notifikasi); Terence tidak punya skill
+    if (oSk) window.skill = function (b) {
+      const was = b && b.used, r = oSk.apply(this, arguments);
+      if (self.active && b && !was && b.used && b.type && b.type !== 'terence') { self.skq.push(b.type); if (self.skq.length > 20) self.skq.shift(); }
+      return r;
+    };
   },
   start(chSt, chEv) {
     this.install(); this.chSt = chSt; this.chEv = chEv;
-    this.known = new Map(); this.pend = []; this.txq = []; this.metaKey = ''; this.scKey = ''; this.forceKey = true;
+    this.known = new Map(); this.pend = []; this.txq = []; this.skq = []; this.metaKey = ''; this.scKey = ''; this.forceKey = true;
     this.active = true;
     try { chEv.send(JSON.stringify({ t: 'reset' })); } catch (e) { }   // Master kosongkan dunianya; deskriptor semua objek dikirim ulang di langkah berikutnya
   },
@@ -116,13 +122,15 @@ const emitter = {
     for (const b of flock) {
       if (b._id === undefined) b._id = this.newId();
       cur_.add(b._id); list.push(b);
-      if (!this.known.has(b._id)) { this.known.set(b._id, b); nf.push({ i: b._id, x: r2(b.position.x), y: r2(b.position.y), a: r2(b.angle), ty: b.type, lb: b.label, rr: b.rr, c: b.col, lk: b.look }); }
+      if (!this.known.has(b._id)) { this.known.set(b._id, b); b._rr = b.rr; nf.push({ i: b._id, x: r2(b.position.x), y: r2(b.position.y), a: r2(b.angle), ty: b.type, lb: b.label, rr: b.rr, c: b.col, lk: b.look }); }
+      else if (b.rr !== b._rr) { b._rr = b.rr; bu.push({ i: b._id, rr: b.rr }); }   // Bubbles menggembung: radius gambar berubah
     }
     for (const id of this.known.keys()) if (!cur_.has(id)) { rm.push(id); this.known.delete(id); }
     if (rm.length) e.rm = rm; if (nb.length) e.nb = nb; if (nf.length) e.nf = nf; if (bu.length) e.bu = bu;
     const m = this.meta(), mk = JSON.stringify(m); if (mk !== this.metaKey) { this.metaKey = mk; e.m = m; }
     if (this.txq.length) { e.tx = this.txq; this.txq = []; }
-    if (e.rm || e.nb || e.nf || e.bu || e.m || e.tx) { e.t = 'e'; e.n = n; try { chEv.send(JSON.stringify(e)); } catch (er) { } }
+    if (this.skq.length) { e.sk = this.skq; this.skq = []; }
+    if (e.rm || e.nb || e.nf || e.bu || e.m || e.tx || e.sk) { e.t = 'e'; e.n = n; try { chEv.send(JSON.stringify(e)); } catch (er) { } }
 
     // jaringan macet: jangan menumpuk antrean (latensi naik) — buang partikel & kirim ulang snapshot penuh begitu lancar
     if (chSt.bufferedAmount > 32768) { this.forceKey = true; this.pend.length = 0; return; }
@@ -155,7 +163,7 @@ class Replica {
   constructor(cv) {
     this.cv = cv; this.cx = cv.getContext('2d', { alpha: false });
     this.hud = document.createElement('canvas'); this.hud.width = 960; this.hud.height = 100; this.hcx = this.hud.getContext('2d');
-    this.hidden = false; this.big = false; this.D = 6; this.off = null; this.has = false; this.lastSeq = -1;
+    this.hidden = false; this.fin = false; this.onNote = null; this.big = false; this.D = 6; this.off = null; this.has = false; this.lastSeq = -1;
     this.stat = { bytes: 0, pk: 0, frames: 0, ms: 0, lost: 0, exp: 0, starve: 0, calm: 0, out: { fps: 0, kbps: 0, hz: 0, loss: 0, delay: 100, ms: 0 } };
     this.m = { sc: 0, h: 3, sk: 0, cl: 0, sh: 0, qi: 0, q: '', a: 0, w: 0, lv: 0, ng: 0, qs: 0, dn: 0, bq: [], cu: null, cr: 0 };
     this.s = { st: 0, ax: 170, ay: 372, shake: 0, flash: 0 }; this.last = { n: 0, playMs: 0 }; this.lastPopN = -1; this.newN = 0; this.fdone = 0; this.hudKey = '';
@@ -177,7 +185,7 @@ class Replica {
     if (e.rm) for (const id of e.rm) { const b = this.map.get(id); if (b) b.die = e.n; }
     if (e.nb) for (const d of e.nb) this.addBody(d, e.n, 0);
     if (e.nf) for (const d of e.nf) this.addBody(d, e.n, 1);
-    if (e.bu || e.m || e.tx) this.evq.push(e);
+    if (e.bu || e.m || e.tx || e.sk) this.evq.push(e);
   }
   onPacket(buf) {
     const p = decodeSnap(buf); if (!p) return;
@@ -201,10 +209,12 @@ class Replica {
     if (this.buf.length > 200) this.buf.splice(0, this.buf.length - 200);
   }
   simT(now) { return (now - this.off) / STEP - this.D; }
+  note(kind, v) { if (this.onNote) { try { this.onNote(kind, v); } catch (er) { } } }
   spawn(o) { this.nspawn = (this.nspawn || 0) + 1; if (o.k === 'txt') this.ntxt = (this.ntxt || 0) + 1; o.L = o.l; if (o.g === undefined) o.g = .3; this.parts.push(o); if (this.parts.length > 600) this.parts.splice(0, this.parts.length - 600); }
   applyEv(e) {
-    if (e.bu) for (const u of e.bu) { const b = this.map.get(u.i); if (b) { if (u.t !== undefined) b.t = u.t; b.mat = u.m; b.dent = u.d; b.frozen = !!u.f; } }
-    if (e.m) Object.assign(this.m, e.m);
+    if (e.bu) for (const u of e.bu) { const b = this.map.get(u.i); if (b && u.rr !== undefined) { b.rr = u.rr; continue; } if (b) { if (u.t !== undefined) b.t = u.t; b.mat = u.m; b.dent = u.d; b.frozen = !!u.f; } }
+    if (e.m) { const h0 = this.m.h; Object.assign(this.m, e.m); if (typeof e.m.h === 'number' && e.m.h < h0) this.note('life', e.m.h); }
+    if (e.sk) for (const t of e.sk) this.note('skill', t);
     if (e.tx) for (const t of e.tx) this.spawn({ k: 'txt', x: t.x, y: t.y, vx: t.vx, vy: t.vy, g: t.g, l: t.l, c: t.c, tx: t.tx });
   }
   applyPkt(p) {
@@ -237,7 +247,7 @@ class Replica {
     if (T > this.newN + 2) S.starve++;
     if (!this.fdone || Tf - this.fdone > 10 || Tf < this.fdone - 30) this.fdone = Tf - 1;   // lompat (tab sempat tertidur / jam bergeser)
     while (this.fdone < Tf) this.stepTo(++this.fdone);
-    if (this.hidden || !this.has || skipDraw) return;
+    if (this.hidden || this.fin || !this.has || skipDraw) return;
     const vItems = [], vFlock = [];
     for (const b of this.bodies) {
       if (b.birth > Tf || Tf >= b.die) continue;
