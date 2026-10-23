@@ -47,12 +47,21 @@ style.textContent = `
 .tl .vs.ok{display:none}
 .tl .fps{position:absolute;right:8px;top:6px;background:#000a;border-radius:8px;padding:2px 9px;font:800 14px ui-monospace,Menlo,monospace;color:#8f8;pointer-events:none}
 .tl .fps.mid{color:#ffd54f}.tl .fps.low{color:#ff8a80}.tl .fps.none{color:#aaa}
-.tl .nt{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 16px);display:flex;flex-direction:column;gap:4px;pointer-events:none;z-index:3}
-.tl .chp{align-self:flex-start;padding:3px 11px;border-radius:999px;font:800 14px system-ui,sans-serif;color:#fff;box-shadow:0 2px 6px #0007;animation:chp 2.4s ease-out forwards}
-.tl .chp.lf{background:#d32f2f}.tl .chp.sk{background:#ef6c00}
-@keyframes chp{0%{opacity:0;transform:translateY(8px)}8%{opacity:1;transform:none}80%{opacity:1}100%{opacity:0}}
 .tl .fo{position:absolute;inset:0;z-index:4;display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:#000;color:#fff;text-align:center;pointer-events:none}
 .tl .fo.on{display:flex}.tl .fo b{font-size:clamp(22px,4vw,44px);letter-spacing:.12em}.tl .fo .fs{font-size:clamp(18px,3vw,34px);font-weight:900;color:#ffd54f}.tl .fo small{font-size:14px;color:#cfd8ff}
+.tl .vw{container-type:size}
+.tl .ovl{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100cqw,calc(100cqh*16/9));aspect-ratio:16/9;font-size:max(8px,calc(min(100cqw,calc(100cqh*16/9))*.015));pointer-events:none;z-index:3;overflow:hidden;color:#fff}
+.tl .mh{position:absolute;left:50%;bottom:1.8%;transform:translateX(-50%);max-width:58%;background:#000b;color:#fff;border-radius:999px;padding:.4em 1.1em;font-size:1.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;font-weight:400;line-height:normal}
+.tl .mh.sh{animation:mhn 5.5s ease forwards}
+@keyframes mhn{0%{opacity:0;transform:translate(-50%,8px)}7%,82%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,0)}}
+.tl .mh i{display:inline-block;width:.85em;height:.85em;border-radius:50%;margin-right:.5em;border:1px solid #fff8;vertical-align:-.05em}
+.tl .mh .rl{margin:0 .6em 0 .5em}
+.tl .mt{position:absolute;left:50%;top:24%;transform:translateX(-50%);max-width:82%;display:flex;gap:.7em;align-items:center;background:#fff;color:#2a2118;border:.2em solid #ff6b9d;border-radius:1.4em;padding:.55em 1.1em;font-size:1.25em;line-height:1.35;font-weight:400;box-shadow:0 .3em 0 #0004;opacity:0}
+.tl .mt.sh{animation:mtn 3.6s ease forwards}
+@keyframes mtn{0%{opacity:0;transform:translate(-50%,-14px) scale(.8)}8%{opacity:1;transform:translate(-50%,0) scale(1.07)}14%,88%{opacity:1;transform:translate(-50%,0) scale(1)}100%{opacity:0;transform:translate(-50%,0) scale(1)}}
+.tl .mt .tb{font-size:2.2em;line-height:1;display:inline-block;animation:mwob .45s ease-in-out 4}
+@keyframes mwob{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(12deg) translateY(-.1em)}}
+.tl .mt small{opacity:.8;font-size:.8em}
 .tl .sc{position:absolute;left:8px;top:6px;background:#000a;border-radius:8px;padding:2px 10px;font-size:22px;font-weight:900;color:#ffd54f;pointer-events:none}
 .tl .pb{height:6px;border-radius:99px;background:#ffffff26;overflow:hidden}.tl .pb>div{height:100%;background:#2e9e4f;transition:width .6s}
 .tl .tb{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:#cfe;flex-wrap:wrap}
@@ -314,16 +323,29 @@ function startStats(players) {
     }
   }, 1000);
 }
-/* Notifikasi chip di kartu pemain: nyawa berkurang & skill burung (datang dari kejadian siaran, sinkron dengan gambar) */
-const SKILL_TXT = { chuck: 'boost 2× & tembus balok', bomb: 'ledakan area luas', blues: 'pecah jadi 3 burung', matilda: 'jatuhkan telur peledak', hal: 'melambung', bubbles: 'menggembung & dorong balok', silver: 'menukik tajam', stella: 'sedot & banting blok', ice: 'bekukan blok sekitar' };
-function noteChip(id, kind, v) {
-  const box = $$('nt' + id); if (!box) return;
-  const d = document.createElement('div');
-  if (kind === 'life') { d.className = 'chp lf'; d.textContent = '💔 Nyawa −1 · sisa ' + Math.max(0, v); }
-  else { const nm = (typeof B !== 'undefined' && B[v] && B[v].n) || v; d.className = 'chp sk'; d.textContent = (v === 'bubbles' ? '🫧 ' : '⚡ ') + 'Skill ' + nm + ': ' + (SKILL_TXT[v] || 'aktif'); }
-  box.appendChild(d); while (box.children.length > 3) box.firstChild.remove();
-  setTimeout(() => d.remove(), 2500);
+/* Notifikasi di kartu pemain = salinan tampilan layar pemain: bar info skill burung (#hint) & toast anak ayam 🐤 saat nyawa hilang (#toast).
+   Isi dibangun dengan textContent dari data yang disaring (jenis burung dicek ke tabel B milik Master, pesan dipotong 120 huruf) → aman dari HTML sisipan. */
+function showHint(id, t, active) {
+  const el = $$('mh' + id); if (!el || typeof B === 'undefined' || !B[t]) return;
+  const d = B[t], sh = (typeof SH !== 'undefined' && SH[t]) || '';
+  el.textContent = '';
+  const dot = document.createElement('i'); dot.style.background = d.c;
+  const nm = document.createElement('b'); nm.textContent = d.n;
+  const rl = document.createElement('span'); rl.className = 'rl'; rl.textContent = d.k || '';
+  el.append(dot, nm, rl, document.createTextNode(active ? '⚡ Skill aktif: ' + sh.replace(/^Tap:\s*/, '') : sh));
+  el.classList.remove('sh'); void el.offsetWidth; el.classList.add('sh');
 }
+function showToast(id, x) {
+  const el = $$('mt' + id); if (!el) return;
+  const n = Math.max(0, Math.min(2, Math.round(Number(x && x.n)) || 0)), msg = String((x && x.m) || '').slice(0, 120);
+  el.textContent = '';
+  const tb = document.createElement('span'); tb.className = 'tb'; tb.textContent = '🐤';
+  const box = document.createElement('span'), b = document.createElement('b'), sm = document.createElement('small');
+  b.textContent = msg; sm.textContent = '❤️'.repeat(n) + '🖤'.repeat(3 - n) + ' ' + (n > 0 ? 'sisa ' + n + ' nyawa' : 'nyawa habis');
+  box.append(b, document.createElement('br'), sm); el.append(tb, box);
+  el.classList.remove('sh'); void el.offsetWidth; el.classList.add('sh');
+}
+function noteChip(id, kind, v) { if (kind === 'life') showToast(id, v); else if (kind === 'bird') showHint(id, v, false); else if (kind === 'skill') showHint(id, v, true); }
 /* Pemain selesai / kalah / keluar: layar hitam bertuliskan SELESAI + skor (kartu berhenti digambar → hemat CPU) */
 function updateFinished(p, s) {
   const fo = $$('fo' + p.id), r = reps[p.id]; if (!fo) return;
@@ -359,7 +381,7 @@ function showMasterGrid() {
     ol.className = 'full'; shownKey = 'grid' + v.gameNo; if (window.armFS) window.armFS();
     ol.innerHTML = `<div id="mv"><div id="mb"><b>👑 Room Master · ${esc(v.myName)} · Kode ${esc(v.code)}</b><span id="ms"></span><button class="b" id="sp" style="padding:6px 14px">■ Hentikan permainan</button></div><div id="mg">${v.players.map((p, i) => `<div class="tl" id="tl${p.id}">
       <div class="th"><span>P${i + 1} · ${esc(p.name)}</span><span id="hr${p.id}"></span></div>
-      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="640" height="360"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div><div class="nt" id="nt${p.id}"></div><div class="fo" id="fo${p.id}"></div></div>
+      <div class="vw" id="vw${p.id}" title="Klik untuk memperbesar"><canvas id="vd${p.id}" width="640" height="360"></canvas><div class="vs" id="vs${p.id}">📡 Menyambungkan gameplay…</div><div class="sc" id="sc${p.id}">⭐ 0</div><div class="fps none" id="fp${p.id}">— FPS</div><div class="ovl"><div class="mh" id="mh${p.id}"></div><div class="mt" id="mt${p.id}"></div></div><div class="fo" id="fo${p.id}"></div></div>
       <div class="pb"><div id="pg${p.id}" style="width:0"></div></div>
       <div class="tb"><span id="tx${p.id}"></span><span class="bd" id="bd${p.id}"></span></div></div>`).join('')}</div></div>`;
     $$('sp').onclick = async () => { if (!confirm('Hentikan permainan sekarang? Skor saat ini menjadi hasil akhir.')) return; try { applyView((await call('stop')).view); } catch (e) { handleErr(e); } };

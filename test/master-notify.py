@@ -33,29 +33,38 @@ try:
         M.wait_for_function("(()=>{const r=Live.master.reps;return r&&Object.keys(r).length>=2&&Object.values(r).every(x=>x.has)})()", timeout=25000)
         check('Master tersambung ke kedua pemain', True)
 
-        # 1) nyawa berkurang -> chip merah di kartu
-        A.evaluate("hearts=3"); A.wait_for_timeout(400); A.evaluate("hearts=2")
-        M.wait_for_selector('#mg .chp.lf', timeout=6000)
-        t = M.inner_text('#mg .chp.lf'); check('chip nyawa muncul di kartu Master', 'Nyawa' in t and '2' in t, t)
-        M.screenshot(path=SHOTS + '/6-chip-nyawa.png')
+        # 1) nyawa hilang -> toast 🐤 yang SAMA dengan layar pemain
+        A.evaluate("hearts=2;lifeLost()")
+        M.wait_for_selector('#mg .mt.sh', timeout=6000)
+        mt = M.inner_text('#mg .mt.sh'); pt = A.inner_text('#toast')
+        check('toast cip muncul di kartu Master', 'sisa 2 nyawa' in mt and '🐤' in mt, mt)
+        check('pesan toast Master identik dengan layar pemain', mt.replace('\n', ' ').split('sisa')[0].strip().rstrip('❤️🖤 ') in pt.replace('\n', ' ') or pt.split('\n')[0].strip() in mt, (mt, pt))
+        M.screenshot(path=SHOTS + '/6-toast-cip.png')
+        A.evaluate("hearts=1;lifeLost()"); M.wait_for_function("document.querySelector('#mg .mt.sh').innerText.includes('sisa 1 nyawa')", timeout=6000)
+        check('toast kedua memperbarui sisa nyawa (1)', True)
 
+        # bar info skill burung baru (sama dengan layar pemain)
+        A.evaluate("nextBird()")
+        M.wait_for_function("[...document.querySelectorAll('#mg .mh.sh')].some(e=>e.innerText.trim().length>3)", timeout=6000)
+        ph = A.inner_text('#hint').replace('\n', ' ').strip(); mh = [e for e in M.locator('#mg .mh.sh').all_inner_texts() if e.strip()][0].replace('\n', ' ').strip()
+        check('bar skill burung di Master identik dengan layar pemain (nama, peran, deskripsi)', ph == mh, (ph, mh))
         # 2+3) skill Bubbles: chip + burung membesar di Master
         A.evaluate("""(()=>{const bd=Bodies.circle(300,300,13,{label:'bird'});bd.w=0;bd.type='bubbles';bd.used=false;bd.free=true;bd.mx=300;bd.my=300;bd.born=frame;flock=[bd];cur=bd;st='fly';window.__bd=bd;rest=-9999})()""")
         A.wait_for_timeout(1200)
         small = M.evaluate("Object.values(Live.master.reps).map(r=>r.bodies.filter(b=>b.k===1&&b.type==='bubbles').map(b=>b.rr))")
         check('burung Bubbles tampil di Master (ukuran normal sebelum skill)', any(len(s) and all(x in (None, 13) for x in s) for s in small), small)
         A.evaluate("window.skill(window.__bd)")
-        M.wait_for_selector('#mg .chp.sk', timeout=6000)
-        t = M.inner_text('#mg .chp.sk'); check('chip skill muncul (Bubbles)', 'Bubbles' in t and 'menggembung' in t, t)
-        M.screenshot(path=SHOTS + '/7-chip-skill.png')
+        M.wait_for_function("[...document.querySelectorAll('#mg .mh.sh')].some(e=>e.innerText.includes('Skill aktif'))", timeout=6000)
+        t = [e for e in M.locator('#mg .mh.sh').all_inner_texts() if 'Skill aktif' in e][0]; check('bar skill menampilkan skill aktif (Bubbles)', 'Bubbles' in t and 'menggembung' in t, t)
+        M.screenshot(path=SHOTS + '/7-bar-skill.png')
         M.wait_for_timeout(500)
         big = M.evaluate("Object.values(Live.master.reps).map(r=>r.bodies.filter(b=>b.k===1&&b.type==='bubbles').map(b=>b.rr))")
         check('Bubbles menggembung di Master (radius x2,4)', any(abs(x - 13 * 2.4) < .01 for s in big for x in s), big)
 
         # skill tidak dikirim dua kali & Terence tidak memicu chip
-        n0 = M.locator('#mg .chp.sk').count()
-        A.evaluate("window.skill(window.__bd)"); M.wait_for_timeout(600)
-        check('skill yang sama tidak memunculkan chip ganda', M.locator('#mg .chp.sk').count() <= n0)
+        M.evaluate("document.querySelectorAll('#mg .mh').forEach(e=>e.className='mh')")
+        A.evaluate("window.skill(window.__bd)"); M.wait_for_timeout(700)
+        check('skill yang sama (sudah dipakai) tidak memunculkan bar lagi', M.locator('#mg .mh.sh').count() == 0)
 
         # 4) pemain kalah -> layar hitam SELESAI + skor
         A.evaluate("score=1234;hearts=0"); A.wait_for_timeout(2300)
